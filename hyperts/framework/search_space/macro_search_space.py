@@ -1,0 +1,793 @@
+# -*- coding:utf-8 -*-
+"""
+
+"""
+import numpy as np
+
+from hyperts.config import Config as cfg
+from hyperts.utils import consts
+from hyperts.utils.transformers import TimeSeriesHyperTransformer
+from hyperts.framework.estimators import (ProphetForecastEstimator,
+                                          ARIMAForecastEstimator,
+                                          VARForecastEstimator,
+                                          TSFClassificationEstimator,
+                                          KNNClassificationEstimator,
+                                          DeepARForecastEstimator,
+                                          HybirdRNNGeneralEstimator,
+                                          LSTNetGeneralEstimator)
+
+from hypernets.tabular import column_selector as tcs
+from hypernets.core.ops import HyperInput, ModuleChoice, Optional
+from hypernets.core.search_space import HyperSpace, Choice
+from hypernets.pipeline.transformers import (SimpleImputer,
+                                             StandardScaler,
+                                             MinMaxScaler,
+                                             MaxAbsScaler,
+                                             SafeOrdinalEncoder,
+                                             AsTypeTransformer)
+
+from hypernets.pipeline.base import Pipeline, DataFrameMapper
+from hypernets.utils import logging, get_params
+
+logger = logging.get_logger(__name__)
+
+
+##################################### Define Data Proprecessing Pipeline #####################################
+class WithinColumnSelector:
+
+    def __init__(self, selector, selected_cols):
+        self.selector = selector
+        self.selected_cols = selected_cols
+
+    def __call__(self, df):
+        intersection = set(df.columns.tolist()).intersection(self.selected_cols)
+        if len(intersection) > 0:
+            selected_df = df[intersection]
+            return self.selector(selected_df)
+        else:
+            return []
+
+
+def categorical_transform_pipeline(covariables=None, impute_strategy=None, seq_no=0):
+    if impute_strategy is None:
+        impute_strategy = Choice(['constant', 'most_frequent'])
+    elif isinstance(impute_strategy, list):
+        impute_strategy = Choice(impute_strategy)
+    steps = [
+        AsTypeTransformer(dtype='str', name=f'categorical_as_object_{seq_no}'),
+        SimpleImputer(missing_values=np.nan,
+                      strategy=impute_strategy,
+                      name=f'categorical_imputer_{seq_no}'),
+        SafeOrdinalEncoder(name=f'categorical_label_encoder_{seq_no}',
+                           dtype='int32')
+    ]
+    if covariables is not None:
+        cs = WithinColumnSelector(tcs.column_object_category_bool, covariables)
+    else:
+        cs = tcs.column_object_category_bool
+    pipeline = Pipeline(steps, columns=cs,
+                        name=f'categorical_covariable_transform_pipeline_{seq_no}')
+    return pipeline
+
+
+def numeric_transform_pipeline(covariables=None, impute_strategy=None, seq_no=0):
+    if impute_strategy is None:
+        impute_strategy = Choice(['mean', 'median', 'constant', 'most_frequent'])
+    elif isinstance(impute_strategy, list):
+        impute_strategy = Choice(impute_strategy)
+
+    imputer = SimpleImputer(missing_values=np.nan,
+                            strategy=impute_strategy,
+                            name=f'numeric_imputer_{seq_no}',
+                            force_output_as_float=True)
+    scaler_options = ModuleChoice(
+        [
+            StandardScaler(name=f'numeric_standard_scaler_{seq_no}'),
+            MinMaxScaler(name=f'numeric_minmax_scaler_{seq_no}'),
+            MaxAbsScaler(name=f'numeric_maxabs_scaler_{seq_no}')
+        ], name=f'numeric_or_scaler_{seq_no}'
+    )
+    scaler_optional = Optional(scaler_options, keep_link=True, name=f'numeric_scaler_optional_{seq_no}')
+    if covariables == None:
+        cs = WithinColumnSelector(tcs.column_number_exclude_timedelta, covariables)
+    else:
+        cs = tcs.column_number_exclude_timedelta
+    pipeline = Pipeline([imputer, scaler_optional], columns=cs,
+                        name=f'numeric_covariate_transform_pipeline_{seq_no}')
+    return pipeline
+
+
+##################################### Define Base Search Space Generator #####################################
+
+class _HyperEstimatorCreator:
+
+    def __init__(self, cls, init_kwargs, fit_kwargs):
+        super(_HyperEstimatorCreator, self).__init__()
+
+        self.estimator_cls = cls
+        self.estimator_fit_kwargs = fit_kwargs if fit_kwargs is not None else {}
+        self.estimator_init_kwargs = init_kwargs if init_kwargs is not None else {}
+
+    def __call__(self, *args, **kwargs):
+        return self.estimator_cls(self.estimator_fit_kwargs, **self.estimator_init_kwargs)
+
+
+class BaseSearchSpaceGenerator:
+
+    def __init__(self, task, **kwargs) -> None:
+        super().__init__()
+        self.task = task
+        self.options = kwargs
+
+    @property
+    def estimators(self):
+        raise NotImplementedError('Please define estimators in here.')
+
+    def create_preprocessor(self, hyper_input, options):
+        dataframe_mapper_default = options.pop('dataframe_mapper_default', False)
+        covariables = options.pop('covariables', self.covariables)
+        timestamp = options.pop('timestamp', self.timestamp)
+        pipelines = []
+
+        if covariables is not None:
+            # category
+            if cfg.category_pipeline_enabled:
+                pipelines.append(categorical_transform_pipeline(covariables=covariables)(hyper_input))
+            # numeric
+            if cfg.numeric_pipeline_enabled:
+                pipelines.append(numeric_transform_pipeline(covariables=covariables)(hyper_input))
+        # timestamp
+        if timestamp is not None:
+            pipelines.append(Pipeline([TimeSeriesHyperTransformer()],
+                                      columns=[timestamp],
+                                      name=f'timestamp_transform_pipeline_0')(hyper_input))
+
+        preprocessor = DataFrameMapper(default=dataframe_mapper_default, input_df=True, df_out=True,
+                                       df_out_dtype_transforms=[(tcs.column_object, 'int')])(pipelines)
+        return preprocessor
+
+    def create_estimators(self, hyper_input, options):
+        assert len(self.estimators.keys()) > 0
+
+        creators = [_HyperEstimatorCreator(pairs[0],
+                                           init_kwargs=self._merge_dict(pairs[1],
+                                                                        options.pop(f'{k}_init_kwargs', None)),
+                                           fit_kwargs=self._merge_dict(pairs[2], options.pop(f'{k}_fit_kwargs', None)))
+                    for k, pairs in self.estimators.items()]
+
+        unused = {}
+        for k, v in options.items():
+            used = False
+            for c in creators:
+                if k in c.estimator_init_kwargs.keys():
+                    c.estimator_init_kwargs[k] = v
+                    used = True
+                if k in c.estimator_fit_kwargs.keys():
+                    used = True
+            if not used:
+                unused[k] = v
+        if len(unused) > 0:
+            for c in creators:
+                c.estimator_fit_kwargs.update(unused)
+
+        estimators = [c() for c in creators]
+        return ModuleChoice(estimators, name='estimator_options')(hyper_input)
+
+    def __call__(self, *args, **kwargs):
+        options = self._merge_dict(self.options, kwargs)
+
+        space = HyperSpace()
+        with space.as_default():
+            hyper_input = HyperInput(name='input1')
+            if self.task in consts.TASK_LIST_CLASSIFICATION + consts.TASK_LIST_REGRESSION:
+                self.create_estimators(hyper_input, options)
+            elif self.task in consts.TASK_LIST_FORECAST:
+                self.create_estimators(self.create_preprocessor(hyper_input, options), options)
+            space.set_inputs(hyper_input)
+
+        return space
+
+    def _merge_dict(self, *args):
+        d = {}
+        for a in args:
+            if isinstance(a, dict):
+                d.update(a)
+        return d
+
+    def __repr__(self):
+        params = get_params(self)
+        params.update(self.options)
+        repr_ = ', '.join(['%s=%r' % (k, v) for k, v in params.items()])
+        return f'{type(self).__name__}({repr_})'
+
+
+class SearchSpaceMixin:
+
+    def __init__(self):
+        self.task = None
+        self.timestamp = None
+        self.covariables = None
+        self.freq = None
+        self.metrics = None
+        self.window = None
+        self.horizon = None
+
+    def update_init_params(self, **kwargs):
+        if self.task is None and kwargs.get('task') is not None:
+            self.task = kwargs.get('task')
+        if self.timestamp is None and kwargs.get('timestamp') is not None:
+            self.timestamp = kwargs.get('timestamp')
+        if self.covariables is None and kwargs.get('covariables') is not None:
+            self.covariables = kwargs.get('covariables')
+        if self.freq is None and kwargs.get('freq') is not None:
+            self.freq = kwargs.get('freq')
+        if self.metrics is None and kwargs.get('metrics') is not None:
+            self.metrics = kwargs.get('metrics')
+        if self.window is None and kwargs.get('window') is not None:
+            self.window = kwargs.get('window')
+        if self.horizon == 1 and kwargs.get('horizon') is not None:
+            self.horizon = kwargs.get('horizon')
+
+
+##################################### Define Specific Search Space Generator #####################################
+
+class StatsForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
+    """
+    Parameters
+    ----------
+    task: str or None, optional, default None. If not None, it must be 'univariate-forecast' or
+        'multivariate-forecast'.
+    timestamp: str or None, optional, default None.
+    metrics: str or None, optional, default None. Support mse, mae, rmse, mape, smape, msle, and so on.
+    enable_prophet: bool, default True.
+    enable_arima: bool, default True.
+    enable_var: bool, default True.
+    prophet_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which prophet is searched.
+    arima_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which arima is searched.
+    var_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which var is searched.
+
+    Returns
+    ----------
+    search space.
+
+    Notes
+    ----------
+    1. For the hyper-parameters of deepar_init_kwargs, hybirdrnn_init_kwargs and lstnet_init_kwargs,
+        you can refer to `hyperts.framework.estimators.ProphetForecastEstimator,
+        hyperts.framework.estimators.ARIMAForecastEstimator, and
+        hyperts.framework.estimators.VARForecastEstimator.`
+    2. If other parameters exist, set them directly. For example, covariables=['is_holiday'].
+    """
+    def __init__(self, task=None, timestamp=None,
+                 enable_prophet=True,
+                 enable_arima=True,
+                 enable_var=True,
+                 prophet_init_kwargs=None,
+                 arima_init_kwargs=None,
+                 var_init_kwargs=None,
+                 **kwargs):
+        if enable_prophet and prophet_init_kwargs is not None:
+            kwargs['prophet_init_kwargs'] = prophet_init_kwargs
+        if enable_arima and arima_init_kwargs is not None:
+            kwargs['arima_init_kwargs'] = arima_init_kwargs
+        if enable_var and var_init_kwargs is not None:
+            kwargs['var_init_kwargs'] = var_init_kwargs
+        super(StatsForecastSearchSpace, self).__init__(task, **kwargs)
+
+        self.task = task
+        self.timestamp = timestamp
+        self.enable_prophet = enable_prophet
+        self.enable_arima = enable_arima
+        self.enable_var = enable_var
+
+    @property
+    def default_prophet_init_kwargs(self):
+        return {
+            'freq': self.freq,
+
+            'seasonality_mode': Choice(['additive', 'multiplicative']),
+            'changepoint_prior_scale': Choice([0.001, 0.01, 0.1, 0.5]),
+            'seasonality_prior_scale': Choice([0.01, 0.1, 1.0, 10.0]),
+            'holidays_prior_scale': Choice([0.01, 0.1, 1.0, 10.0]),
+            'changepoint_range': Choice([0.8, 0.85, 0.9, 0.95]),
+
+            # 'y_scale': Choice(['none-scale', 'min_max', 'max_abs', 'z_scale']),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
+        }
+
+    @property
+    def default_prophet_fit_kwargs(self):
+        return {
+            'timestamp': self.timestamp
+        }
+
+    @property
+    def default_arima_init_kwargs(self):
+        return {
+            'freq': self.freq,
+
+            'p': Choice([1, 2, 3, 4, 5]),
+            'd': Choice([0, 1]),
+            'q': Choice([0, 1, 2]),
+            'trend': Choice(['n', 'c', 't']),
+            'seasonal_order': Choice([(1, 0, 0), (1, 0, 1), (1, 1, 1),
+                                      (0, 1, 1), (1, 1, 0), (0, 1, 0)]),
+            # 'period_offset': Choice([0, 0, 0, 0, 0, 0, 1, -1, 2, -2]),
+
+            'y_scale': Choice(['none-scale', 'min_max', 'max_abs', 'z_scale']),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
+        }
+
+    @property
+    def default_arima_fit_kwargs(self):
+        return {
+            'timestamp': self.timestamp
+        }
+
+    @property
+    def default_var_init_kwargs(self):
+        return {
+            # 'ic': Choice(['aic', 'fpe', 'hqic', 'bic']),
+            'maxlags': Choice([None, 2, 6, 12, 24, 48]),
+            'trend': Choice(['c', 'ct', 'ctt', 'nc', 'n']),
+            'y_log': Choice(['none-log']*4+['logx']*1),
+            'y_scale': Choice(['min_max']*5+['z_scale']*2+['max_abs']*1)
+        }
+
+    @property
+    def default_var_fit_kwargs(self):
+        return {
+            'timestamp': self.timestamp
+        }
+
+    @property
+    def estimators(self):
+        univar_containers = {}
+        multivar_containers = {}
+
+        if self.enable_prophet and ProphetForecastEstimator().is_prophet_installed:
+            univar_containers['prophet'] = (
+            ProphetForecastEstimator, self.default_prophet_init_kwargs, self.default_prophet_fit_kwargs)
+        if self.enable_arima:
+            univar_containers['arima'] = (
+            ARIMAForecastEstimator, self.default_arima_init_kwargs, self.default_arima_fit_kwargs)
+        if self.enable_var:
+            multivar_containers['var'] = (
+            VARForecastEstimator, self.default_var_init_kwargs, self.default_var_fit_kwargs)
+
+        if self.task == consts.Task_UNIVARIATE_FORECAST:
+            return univar_containers
+        elif self.task == consts.Task_MULTIVARIATE_FORECAST:
+            return multivar_containers
+        else:
+            raise ValueError(f'Incorrect task name, default {consts.Task_UNIVARIATE_FORECAST}'
+                             f' or {consts.Task_MULTIVARIATE_FORECAST}.')
+
+
+class StatsClassificationSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
+    """
+    Parameters
+    ----------
+    task: str or None, optional, default None. If not None, it must be 'univariate-binaryclass',
+        'univariate-multiclass', 'multivariate-binaryclass, or ’multivariate-multiclass’.
+    timestamp: str or None, optional, default None.
+    metrics: str or None, optional, default None. Support accuracy, f1, auc, recall, precision.
+    enable_tsf: bool, default True.
+    enable_knn: bool, default True.
+    tsf_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which tsf is searched.
+    knn_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which knn is searched.
+
+    Returns
+    ----------
+    search space.
+
+    Notes
+    ----------
+    1. For the hyper-parameters of tsf_init_kwargs, knn_init_kwargs,
+        you can refer to `hyperts.framework.estimators.TSFClassificationEstimator, and
+        hyperts.framework.estimators.KNNClassificationEstimator.`
+    2. If other parameters exist, set them directly. For example, n_estimators=200.
+    """
+    def __init__(self, task=None, timestamp=None,
+                 enable_tsf=True,
+                 enable_knn=True,
+                 tsf_init_kwargs=None,
+                 knn_init_kwargs=None,
+                 **kwargs):
+        if hasattr(kwargs, 'covariables'):
+            kwargs.pop('covariables', None)
+        if enable_tsf and tsf_init_kwargs is not None:
+            kwargs['tsf_init_kwargs'] = tsf_init_kwargs
+        if enable_knn and knn_init_kwargs is not None:
+            kwargs['knn_init_kwargs'] = knn_init_kwargs
+        super(StatsClassificationSearchSpace, self).__init__(task, **kwargs)
+
+        self.task = task
+        self.timestamp = timestamp
+        self.enable_tsf = enable_tsf
+        self.enable_knn = enable_knn
+
+    @property
+    def default_tsf_init_kwargs(self):
+        return {
+            'min_interval': Choice([3, 5, 7]),
+            'n_estimators': Choice([50, 100, 200, 300, 500]),
+        }
+
+    @property
+    def default_tsf_fit_kwargs(self):
+        return {
+            'timestamp': self.timestamp
+        }
+
+    @property
+    def default_knn_init_kwargs(self):
+        return {
+            'n_neighbors': Choice([1, 3, 5, 7, 9, 15]),
+            'weights': Choice(['uniform', 'distance']),
+            'distance': Choice(['dtw', 'ddtw', 'lcss', 'msm']),
+            'x_scale': Choice(['z_score', 'scale-none'])
+        }
+
+    @property
+    def default_knn_fit_kwargs(self):
+        return {
+            'timestamp': self.timestamp
+        }
+
+    @property
+    def estimators(self):
+        univar_containers = {}
+        multivar_containers = {}
+
+        if self.enable_tsf:
+            univar_containers['tsf'] = (
+            TSFClassificationEstimator, self.default_tsf_init_kwargs, self.default_tsf_fit_kwargs)
+        if self.enable_knn:
+            univar_containers['knn'] = (
+            KNNClassificationEstimator, self.default_knn_init_kwargs, self.default_knn_fit_kwargs)
+            multivar_containers['knn'] = (
+            KNNClassificationEstimator, self.default_knn_init_kwargs, self.default_knn_fit_kwargs)
+
+        if self.task in [consts.Task_UNIVARIATE_BINARYCLASS, consts.Task_UNIVARIATE_MULTICALSS]:
+            return univar_containers
+        elif self.task in [consts.Task_MULTIVARIATE_BINARYCLASS, consts.Task_MULTIVARIATE_MULTICALSS]:
+            return multivar_containers
+        else:
+            raise ValueError(f'Incorrect task name, default {consts.Task_UNIVARIATE_BINARYCLASS}'
+                             f', {consts.Task_UNIVARIATE_MULTICALSS}, {consts.Task_MULTIVARIATE_BINARYCLASS}'
+                             f', or {consts.Task_MULTIVARIATE_MULTICALSS}.')
+
+
+class DLForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
+    """
+    Parameters
+    ----------
+    task: str or None, optional, default None. If not None, it must be 'univariate-forecast' or
+        'multivariate-forecast'.
+    timestamp: str or None, optional, default None.
+    metrics: str or None, optional, default None. Support mse, mae, rmse, mape, smape, msle, and so on.
+    enable_deepar: bool, default True.
+    enable_hybirdrnn: bool, default True.
+    enable_lstnet: bool, default True.
+    deepar_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which deepar is searched.
+    hybirdrnn_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which hybirdrnn is searched.
+    lstnet_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which lstnet is searched.
+
+    Returns
+    ----------
+    search space.
+
+    Notes
+    ----------
+    1. For the hyper-parameters of deepar_init_kwargs, hybirdrnn_init_kwargs and lstnet_init_kwargs,
+        you can refer to `hyperts.framework.estimators.DeepARForecastEstimator,
+        hyperts.framework.estimators.HybirdRNNGeneralEstimator, and
+        hyperts.framework.estimators.LSTNetGeneralEstimator.`
+    2. If other parameters exist, set them directly. For example, covariables=['is_holiday'].
+    """
+    def __init__(self, task=None, timestamp=None, metrics=None,
+                 window=None, horizon=1,
+                 enable_deepar=True,
+                 enable_hybirdrnn=True,
+                 enable_lstnet=True,
+                 deepar_init_kwargs=None,
+                 hybirdrnn_init_kwargs=None,
+                 lstnet_init_kwargs=None,
+                 **kwargs):
+        if enable_deepar and deepar_init_kwargs is not None:
+            kwargs['deepar_init_kwargs'] = deepar_init_kwargs
+        if enable_hybirdrnn and hybirdrnn_init_kwargs is not None:
+            kwargs['hybirdrnn_init_kwargs'] = hybirdrnn_init_kwargs
+        if enable_lstnet and lstnet_init_kwargs is not None:
+            kwargs['lstnet_init_kwargs'] = lstnet_init_kwargs
+        super(DLForecastSearchSpace, self).__init__(task, **kwargs)
+
+        self.task = task
+        self.timestamp = timestamp
+        self.metrics = metrics
+        self.window = window
+        self.horizon = horizon
+        self.enable_deepar = enable_deepar
+        self.enable_hybirdrnn = enable_hybirdrnn
+        self.enable_lstnet = enable_lstnet
+
+    @property
+    def default_deepar_init_kwargs(self):
+        return {
+            'timestamp': self.timestamp,
+            'task': self.task,
+            'metrics': self.metrics,
+            'horizon': self.horizon,
+            'reducelr_patience': 5,
+            'earlystop_patience': 15,
+            'summary': True,
+
+            'optimizer': 'adam',
+            'loss': 'log_gaussian_loss',
+            'rnn_type': Choice(['gru', 'lstm']),
+            'rnn_units': Choice([64]*2+[128]*3+[256]*2),
+            'rnn_layers': Choice([2, 3]),
+            'drop_rate': Choice([0., 0.1, 0.2]),
+            'forecast_length': Choice([1]*8+[3, 6]),
+            'window': Choice(self.window if isinstance(self.window, list) else [self.window]),
+
+            'y_log': Choice(['none-log']*4+['logx']*1),
+            'y_scale': Choice(['min_max']*4+['z_scale']*1),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
+        }
+
+    @property
+    def default_deepar_fit_kwargs(self):
+        return {
+            'epochs': consts.TRAINING_EPOCHS,
+            'batch_size': None,
+            'verbose': 1,
+        }
+
+    @property
+    def default_hybirdrnn_init_kwargs(self):
+        return {
+            'timestamp': self.timestamp,
+            'task': self.task,
+            'metrics': self.metrics,
+            'reducelr_patience': 5,
+            'earlystop_patience': 15,
+            'summary': True,
+
+            'optimizer': 'adam',
+            'loss': Choice(['mae', 'mse', 'huber_loss']),
+            'rnn_type': Choice(['gru', 'lstm']),
+            'rnn_units': Choice([64]*2+[128]*3+[256]*2),
+            'rnn_layers': Choice([2, 3]),
+            'drop_rate': Choice([0., 0.1, 0.2]),
+            'forecast_length': Choice([1]*8+[3, 6]),
+            'window': Choice(self.window if isinstance(self.window, list) else [self.window]),
+
+            'y_log': Choice(['none-log']*4+['logx']*1),
+            'y_scale': Choice(['min_max']*5+['z_scale']*2+['max_abs']*1),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
+        }
+
+    @property
+    def default_hybirdrnn_fit_kwargs(self):
+        return {
+            'epochs': consts.TRAINING_EPOCHS,
+            'batch_size': None,
+            'verbose': 1,
+        }
+
+    @property
+    def default_lstnet_init_kwargs(self):
+        return {
+            'timestamp': self.timestamp,
+            'task': self.task,
+            'metrics': self.metrics,
+            'reducelr_patience': 5,
+            'earlystop_patience': 15,
+            'summary': True,
+
+            'optimizer': 'adam',
+            'loss': Choice(['mae', 'mse', 'huber_loss']),
+            'rnn_type': Choice(['gru', 'lstm']),
+            'skip_rnn_type': Choice(['gru', 'lstm']),
+            'cnn_filters': Choice([64]*2+[128]*3+[256]*2),
+            'kernel_size': Choice([1]+[3]*3+[6]*3),
+            'rnn_units': Choice([64]*2+[128]*3+[256]*2),
+            'skip_rnn_units': Choice([32]*2+[64]*3+[128]*2),
+            'rnn_layers': Choice([1]*1+[2]*4+[3]*4),
+            'skip_rnn_layers': Choice([1]*1+[2]*4+[3]*4),
+            'drop_rate': Choice([0., 0.1, 0.2]),
+            'skip_period': Choice([0, 2, 3, 5]),
+            'ar_order': Choice([2, 3, 5]),
+            'forecast_length': Choice([1]*8+[3, 6]),
+            'window': Choice(self.window if isinstance(self.window, list) else [self.window]),
+
+            'y_log': Choice(['none-log']*4+['logx']*1),
+            'y_scale': Choice(['min_max']*5+['z_scale']*2+['max_abs']*1),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
+        }
+
+    @property
+    def default_lstnet_fit_kwargs(self):
+        return {
+            'epochs': consts.TRAINING_EPOCHS,
+            'batch_size': None,
+            'verbose': 1,
+        }
+
+    @property
+    def estimators(self):
+        univar_containers = {}
+        multivar_containers = {}
+
+        if self.enable_deepar:
+            univar_containers['deepar'] = (
+                DeepARForecastEstimator, self.default_deepar_init_kwargs, self.default_deepar_fit_kwargs)
+        if self.enable_hybirdrnn:
+            univar_containers['hybirdrnn'] = (
+                HybirdRNNGeneralEstimator, self.default_hybirdrnn_init_kwargs, self.default_hybirdrnn_fit_kwargs)
+            multivar_containers['hybirdrnn'] = (
+                HybirdRNNGeneralEstimator, self.default_hybirdrnn_init_kwargs, self.default_hybirdrnn_fit_kwargs)
+        if self.enable_lstnet:
+            univar_containers['lstnet'] = (
+                LSTNetGeneralEstimator, self.default_lstnet_init_kwargs, self.default_lstnet_fit_kwargs)
+            multivar_containers['lstnet'] = (
+                LSTNetGeneralEstimator, self.default_lstnet_init_kwargs, self.default_lstnet_fit_kwargs)
+
+        if self.task == consts.Task_UNIVARIATE_FORECAST:
+            return univar_containers
+        elif self.task == consts.Task_MULTIVARIATE_FORECAST:
+            return multivar_containers
+        else:
+            raise ValueError(f'Incorrect task name, default {consts.Task_UNIVARIATE_FORECAST}'
+                             f' or {consts.Task_MULTIVARIATE_FORECAST}.')
+
+
+class DLClassificationSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
+    """
+    Parameters
+    ----------
+    task: str or None, optional, default None. If not None, it must be 'univariate-binaryclass',
+        'univariate-multiclass', 'multivariate-binaryclass, or ’multivariate-multiclass’.
+    timestamp: str or None, optional, default None.
+    metrics: str or None, optional, default None. Support accuracy, f1, auc, recall, precision.
+    enable_hybirdrnn: bool, default True.
+    enable_lstnet: bool, default True.
+    hybirdrnn_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which hybirdrnn is searched.
+    lstnet_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which lstnet is searched.
+
+    Returns
+    ----------
+    search space.
+
+    Notes
+    ----------
+    1. For the hyper-parameters of deepar_init_kwargs, hybirdrnn_init_kwargs and lstnet_init_kwargs,
+        you can refer to `hyperts.framework.estimators.HybirdRNNGeneralEstimator, and
+        hyperts.framework.estimators.LSTNetGeneralEstimator.`
+    2. If other parameters exist, set them directly. For example, n_estimators=200.
+    """
+    def __init__(self, task=None, timestamp=None, metrics=None,
+                 enable_hybirdrnn=True,
+                 enable_lstnet=True,
+                 hybirdrnn_init_kwargs=None,
+                 lstnet_init_kwargs=None,
+                 **kwargs):
+        if hasattr(kwargs, 'covariables'):
+            kwargs.pop('covariables', None)
+        if enable_hybirdrnn and hybirdrnn_init_kwargs is not None:
+            kwargs['hybirdrnn_init_kwargs'] = hybirdrnn_init_kwargs
+        if enable_lstnet and lstnet_init_kwargs is not None:
+            kwargs['lstnet_init_kwargs'] = lstnet_init_kwargs
+        super(DLClassificationSearchSpace, self).__init__(task, **kwargs)
+
+        self.task = task
+        self.timestamp = timestamp
+        self.metrics = metrics
+        self.enable_hybirdrnn = enable_hybirdrnn
+        self.enable_lstnet = enable_lstnet
+
+    @property
+    def default_hybirdrnn_init_kwargs(self):
+        return {
+            'timestamp': self.timestamp,
+            'task': self.task,
+            'metrics': self.metrics,
+            'reducelr_patience': 5,
+            'earlystop_patience': 15,
+            'summary': True,
+
+            'rnn_type': Choice(['gru', 'lstm']),
+            'rnn_units': Choice([64]*2+[128]*3+[256]*2),
+            'rnn_layers': Choice([1]*1+[2]*4+[3]*4+[4]*1),
+            'drop_rate': Choice([0.]*4+[0.1]*4+[0.2]*1),
+
+            'x_scale': Choice(['min_max']*8+['max_abs']*1+['z_scale']*1)
+        }
+
+    @property
+    def default_hybirdrnn_fit_kwargs(self):
+        return {
+            'epochs': consts.TRAINING_EPOCHS,
+            'batch_size': None,
+            'verbose': 1,
+        }
+
+    @property
+    def default_lstnet_init_kwargs(self):
+        return {
+            'timestamp': self.timestamp,
+            'task': self.task,
+            'metrics': self.metrics,
+            'reducelr_patience': 5,
+            'earlystop_patience': 15,
+            'summary': True,
+
+            'rnn_type': Choice(['gru', 'lstm']),
+            'cnn_filters': Choice([64]*2+[128]*3+[256]*2),
+            'kernel_size': Choice([1, 3, 5, 8]),
+            'rnn_units': Choice([64]*2+[128]*3+[256]*2),
+            'rnn_layers': Choice([1]*1+[2]*4+[3]*4+[4]*1),
+            'drop_rate': Choice([0.]*4+[0.1]*4+[0.2]*1),
+            'skip_period': 0,
+
+            'x_scale': Choice(['min_max']*8+['max_abs']*1+['z_scale']*1)
+        }
+
+    @property
+    def default_lstnet_fit_kwargs(self):
+        return {
+            'epochs': consts.TRAINING_EPOCHS,
+            'batch_size': None,
+            'verbose': 1,
+        }
+
+    @property
+    def estimators(self):
+        containers = {}
+
+        if self.enable_hybirdrnn:
+            containers['hybirdrnn'] = (
+                HybirdRNNGeneralEstimator, self.default_hybirdrnn_init_kwargs, self.default_hybirdrnn_fit_kwargs)
+        if self.enable_lstnet:
+            containers['lstnet'] = (
+                LSTNetGeneralEstimator, self.default_lstnet_init_kwargs, self.default_lstnet_fit_kwargs)
+
+        if self.task in consts.TASK_LIST_CLASSIFICATION + consts.TASK_LIST_REGRESSION:
+            return containers
+        else:
+            raise ValueError(f'Incorrect task name, default {consts.TASK_LIST_CLASSIFICATION}'
+                             f', or {consts.TASK_LIST_REGRESSION}.')
+
+
+stats_forecast_search_space = StatsForecastSearchSpace
+
+stats_classification_search_space = StatsClassificationSearchSpace
+
+stats_regression_search_space = None
+
+dl_forecast_search_space = DLForecastSearchSpace
+
+dl_classification_search_space = DLClassificationSearchSpace
+
+dl_regression_search_space = None
+
+
+if __name__ == '__main__':
+    from hypernets.searchers.random_searcher import RandomSearcher
+
+    sfss = stats_forecast_search_space(task='univariate-forecast', timestamp='ts', covariables=['id', 'cos'])
+    searcher = RandomSearcher(sfss, optimize_direction='min')
+    sample = searcher.sample()
+    print(sample)

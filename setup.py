@@ -8,6 +8,14 @@ import os
 from os import path as P
 
 
+try:
+    import tensorflow
+
+    tf_installed = True
+except ImportError:
+    tf_installed = False
+
+
 def read_requirements(file_path='requirements.txt'):
     if not os.path.exists(file_path):
         return []
@@ -41,6 +49,8 @@ MIN_PYTHON_VERSION = '>=3.6.*'
 long_description = open('README.md', encoding='utf-8').read()
 
 requires = read_requirements()
+if not tf_installed:
+    requirements = ['tensorflow>=2.0.0,<2.5.0', ] + requires
 
 setup(
     name='hyperts',
@@ -60,6 +70,7 @@ setup(
         'Intended Audience :: Education',
         'Intended Audience :: Science/Research',
         'Programming Language :: Python',
+        'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
         'Topic :: Scientific/Engineering',
@@ -70,7 +81,7 @@ setup(
     ],
     packages=find_packages(exclude=('docs', 'tests')),
     package_data={
-        'hypergbm': ['examples/*', 'examples/**/*', 'examples/**/**/*'],
+        'hyperts': ['examples/*', 'examples/**/*', 'examples/**/**/*', 'datasets/*.pkl', 'datasets/*.csv'],
     },
     zip_safe=False,
     include_package_data=True,
