@@ -32,6 +32,8 @@ def DeepARModel(task, window, rnn_type, continuous_columns, categorical_columns,
     drop_rate  : Float between 0 and 1 - The rate of Dropout for neural nets.
     nb_outputs : Positive Int, Only and default 1.
     nb_steps   : Positive Int, The step length of forecast, only and default 1.
+    out_activation : Str - Forecast the task output activation function,
+                 optional {'linear', 'sigmoid', 'tanh'}, default = 'linear'.
     """
 
     if task not in consts.TASK_LIST_FORECAST:
@@ -44,6 +46,7 @@ def DeepARModel(task, window, rnn_type, continuous_columns, categorical_columns,
     denses = layers.build_denses(continuous_columns, continuous_inputs)
     embeddings = layers.build_embeddings(categorical_columns, categorical_inputs)
     if embeddings is not None:
+        denses = layers.LayerNormalization(name='layer_norm')(denses)
         x = layers.Concatenate(axis=-1, name='concat_embeddings_dense_inputs')([denses, embeddings])
     else:
         x = denses
@@ -77,6 +80,8 @@ class DeepAR(BaseDeepEstimator):
                  default = 1.
     drop_rate  : Float between 0 and 1 - The rate of Dropout for neural nets,
                  default = 0.
+    out_activation : Str - Forecast the task output activation function,
+                 optional {'linear', 'sigmoid', 'tanh'}, default = 'linear'.
     window     : Positive Int - Length of the time series sequences for a sample,
                  default = 3.
     horizon    : Positive Int - Length of the prediction horizon,

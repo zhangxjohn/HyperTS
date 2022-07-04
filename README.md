@@ -27,8 +27,8 @@ As an easy-to-use and lower-thoreshold API, users can get a model after simply r
 | --------------------------------- | --------------------------------- |
 [Expected Data Format](https://hyperts.readthedocs.io/en/latest/contents/0300_dataformat.html)|What data formats do HyperTS expect?|
 |[Quick Start](https://hyperts.readthedocs.io/en/latest/contents/0400_quick_start.html)| How to get started quickly with HyperTS?|
-|[Advanced Ladder](https://hyperts.readthedocs.io/en/latest/contents/0500_advanced_config.html)|How to realize the potential of HyprTS?|
-|[Custom Functions](https://hyperts.readthedocs.io/en/latest/contents/0600_custom_functions.html)|How to customize the functions of HyprTS?|
+|[Advanced Ladder](https://hyperts.readthedocs.io/en/latest/contents/0500_advanced_config.html)|How to realize the potential of HyperTS?|
+|[Custom Functions](https://hyperts.readthedocs.io/en/latest/contents/0600_custom_functions.html)|How to customize the functions of HyperTS?|
 
 ## Installation
 
@@ -44,6 +44,16 @@ You can also install HyperTS from ``conda`` via the ``conda-forge`` channel:
 conda install -c conda-forge hyperts
 ```
 
+If you would like the most up-to-date version, you can instead install direclty from ``github``:
+
+```bash
+git clone https://github.com/DataCanvasIO/HyperTS.git
+cd HyperTS
+conda install -c conda-forge prophet==1.0.1 #optional
+pip install -e . 
+pip install tensorflow #optional
+````
+
 Note:
 
 - Prophet is required by HyperTS, install it from ``conda`` before installing HyperTS using ``pip``.
@@ -53,7 +63,7 @@ For more installation tips, see [installation](https://hyperts.readthedocs.io/en
 
 ## Examples
 
-Users can quickly create and ```run()``` an experiment with ```make_experiment()```, where ```train_data```, and ```task``` are required input parameters. In the following forecast example, we define the experiment as a multivariate-forecast ```task```, and use the statistical model (stat ```mode```) . Besides, the mandatory arguments ```timestamp``` and ```covariables``` (if have) should also be defined in the experiment.
+Users can quickly create and ```run()``` an experiment with ```make_experiment()```, where ```train_data```, and ```task``` are required input parameters. In the following forecast example, we define the experiment as a multivariate-forecast ```task```, and use the statistical model (stat ```mode```) . Besides, the mandatory arguments ```timestamp``` and ```covariates``` (if have) should also be defined in the experiment.
 
 ```python
 from hyperts import make_experiment
@@ -89,13 +99,15 @@ HyperTS supports the following features:
 
 **Multi-task Support:** Time series forecasting, classification, and regression.
 
-**Multi-mode Support:** A large collection of TS models, including statistical models (Prophet,ARIMA,VAR,etc.) , deep learning models(DeepAR,GRU,LSTNet,etc), and neural architecture search (to be developed).
+**Multi-mode Support:** A large collection of TS models, including statistical models (Prophet, ARIMA, VAR, etc.), deep learning models(DeepAR, GRU, LSTNet, NBeats, etc.), and neural architecture search (to be developed).
 
 **Multi-variate Support:** From univariate to multivariate time series.
 
 **Covariates Support:** Deep learning models support covariates as input featues for time series forecasting. 
 
 **Probabilistic Intervals Support:** Time series forecsting visualization can show confidence intervals.
+
+**Diversified Preprocessing:** Outlier clipping, missing value imputing, sequence smoothing, normalization, etc. 
 
 **Abundant Metrics:** A variety of performance metrics to evaluate results and guide models optimization, including MSE, SMAPE, Accuracy, F1-Score,etc. 
 

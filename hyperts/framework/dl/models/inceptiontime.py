@@ -11,31 +11,34 @@ from hypernets.utils import logging
 logger = logging.get_logger(__name__)
 
 
-def HybirdRNNModel(task, window, rnn_type, continuous_columns, categorical_columns,
-        rnn_units, rnn_layers, drop_rate=0., nb_outputs=1, nb_steps=1, out_activation='linear', **kwargs):
-    """SimpleRNN|GRU|LSTM Model (HybirdRNN).
+def InceptionTimeModel(task, window, continuous_columns, categorical_columns, blocks=3,
+            cnn_filters=32, bottleneck_size=32, kernel_size_list=(1, 3, 5, 8, 12),
+            shortcut=True, short_filters=64, nb_outputs=1, **kwargs):
+    """Inception Time Model (InceptionTime).
 
     Parameters
     ----------
-    task       : Str - Support forecast, classification, and regression.
-                 See hyperts.utils.consts for details.
+    task       : Str - Only 'classification' is supported.
     window     : Positive Int - Length of the time series sequences for a sample.
-    rnn_type   : Str - Type of recurrent neural network,
-                 optional {'simple_rnn', 'gru', 'lstm}.
     continuous_columns: CategoricalColumn class.
                  Contains some information(name, column_names, input_dim, dtype,
                  input_name) about continuous variables.
     categorical_columns: CategoricalColumn class.
                  Contains some information(name, vocabulary_size, embedding_dim,
                  dtype, input_name) about categorical variables.
-    rnn_units  : Positive Int - The dimensionality of the output space for RNN.
-    rnn_layers : Positive Int - The number of the layers for RNN.
-    drop_rate  : Float between 0 and 1 - The rate of Dropout for neural nets.
-    nb_outputs : Int, default 1.
-    nb_steps   : Int, The step length of forecast, default 1.
-    out_activation : Str - Forecast the task output activation function,
-                 optional {'linear', 'sigmoid', 'tanh'}, default = 'linear'.
+    blocks      : Int - The depth of the net architecture.
+    cnn_filters: Int - The number of cnn filters.
+    bottleneck_size: Int - The number of bottleneck (a cnn layer).
+    kernel_size_list: Tuple - The kernel size of cnn for a inceptionblock.
+    shortcut   : Bool - Whether to use shortcut opration.
+    short_filters: Int - The number of filters of shortcut conv1d layer.
+    nb_outputs : Int - The number of classes, default 1.
     """
+    if task not in consts.TASK_LIST_CLASSIFICATION:
+        raise ValueError(f'Unsupported task type {task}.')
+
+    kernel_size_list = list(filter(lambda x: x < window, kernel_size_list))
+
     K.clear_session()
     continuous_inputs, categorical_inputs = layers.build_input_head(window, continuous_columns, categorical_columns)
     denses = layers.build_denses(continuous_columns, continuous_inputs)
@@ -46,36 +49,47 @@ def HybirdRNNModel(task, window, rnn_type, continuous_columns, categorical_colum
     else:
         x = denses
 
-    # backbone
-    x = layers.rnn_forward(x, rnn_units, rnn_layers, rnn_type, name=rnn_type, drop_rate=drop_rate)
-    outputs = layers.build_output_tail(x, task, nb_outputs, nb_steps)
+    s = x
+    for i in range(blocks):
+        x = layers.InceptionBlock(filters=cnn_filters,
+                                  bottleneck_size=bottleneck_size,
+                                  kernel_size_list=kernel_size_list,
+                                  name=f'inceptionblock_{i}')(x)
+        if shortcut and i % 3 == 2:
+            x = layers.Conv1D(short_filters, 1, padding='same', use_bias=False, name=f'shortconv_{i}')(x)
+            s = layers.Shortcut(filters=short_filters, name=f'shortcut_{i}')(s)
+            x = layers.Add(name=f'add_x_s_{i}')([x, s])
+            x = layers.Activation('relu', name=f'relu_x_s_{i}')(x)
+            s = x
 
-    if task in consts.TASK_LIST_FORECAST:
-        outputs = layers.Activation(out_activation, name=f'output_activation_{out_activation}')(outputs)
+    x = layers.GlobalAveragePooling1D(name='globeal_avg_pool')(x)
+    outputs = layers.build_output_tail(x, task, nb_outputs)
 
     all_inputs = list(continuous_inputs.values()) + list(categorical_inputs.values())
-    model = tf.keras.models.Model(inputs=all_inputs, outputs=[outputs], name=f'HybirdRNN-{rnn_type}')
+    model = tf.keras.models.Model(inputs=all_inputs, outputs=[outputs], name=f'InceptionTime')
 
     return model
 
 
-class HybirdRNN(BaseDeepEstimator):
-    """SimpleRNN|GRU|LSTM Estimator (HybirdRNN).
+class InceptionTime(BaseDeepEstimator):
+    """InceptionTime Estimator.
 
     Parameters
     ----------
     task       : Str - Support forecast, classification, and regression.
                  See hyperts.utils.consts for details.
-    rnn_type   : Str - Type of recurrent neural network,
-                 optional {'simple_rnn', 'gru', 'lstm}, default = 'gru'.
-    rnn_units  : Positive Int - The dimensionality of the output space for recurrent neural network,
-                 default = 16.
-    rnn_layers : Positive Int - The number of the layers for recurrent neural network,
-                 default = 1.
-    drop_rate  : Float between 0 and 1 - The rate of Dropout for neural nets,
-                 default = 0.
-    out_activation : Str - Forecast the task output activation function, optional {'linear', 'sigmoid', 'tanh'},
-                 default = 'linear'.
+    blocks     : Int - The depth of the net architecture.
+                 default = 3.
+    cnn_filters: Int - The number of cnn filters.
+                 default = 32.
+    bottleneck_size: Int - The number of bottleneck (a cnn layer).
+                 default = 32.
+    kernel_size_list: Tuple - The kernel size of cnn for a inceptionblock.
+                 default = (1, 3, 5, 8, 12).
+    shortcut   : Bool - Whether to use shortcut opration.
+                 default = True.
+    short_filters: Int - The number of filters of shortcut conv1d layer.
+                 default = 64.
     timestamp  : Str or None - Timestamp name, the forecast task must be given,
                  default None.
     window     : Positive Int - Length of the time series sequences for a sample,
@@ -108,14 +122,14 @@ class HybirdRNN(BaseDeepEstimator):
                  Contains some information(name, vocabulary_size, embedding_dim,
                  dtype, input_name) about categorical variables.
     """
-
     def __init__(self,
                  task,
-                 rnn_type='gru',
-                 rnn_units=16,
-                 rnn_layers=1,
-                 drop_rate=0.,
-                 out_activation='linear',
+                 blocks=3,
+                 cnn_filters=32,
+                 bottleneck_size=32,
+                 kernel_size_list=(1, 3, 5, 8, 12),
+                 shortcut=True,
+                 short_filters=64,
                  timestamp=None,
                  window=3,
                  horizon=1,
@@ -131,14 +145,12 @@ class HybirdRNN(BaseDeepEstimator):
                  continuous_columns=None,
                  categorical_columns=None,
                  **kwargs):
-        if task in consts.TASK_LIST_FORECAST and timestamp is None:
-            raise ValueError('The forecast task requires [timestamp] name.')
-
-        self.rnn_type = rnn_type
-        self.rnn_units = rnn_units
-        self.rnn_layers = rnn_layers
-        self.drop_rate = drop_rate
-        self.out_activation = out_activation
+        self.blocks = blocks
+        self.cnn_filters = cnn_filters
+        self.bottleneck_size = bottleneck_size
+        self.kernel_size_list = kernel_size_list
+        self.shortcut = shortcut
+        self.short_filters = short_filters
         self.metrics = metrics
         self.optimizer = optimizer
         self.learning_rate = learning_rate
@@ -146,33 +158,33 @@ class HybirdRNN(BaseDeepEstimator):
         self.summary = summary
         self.model_kwargs = kwargs.copy()
 
-        super(HybirdRNN, self).__init__(task=task,
-                                        timestamp=timestamp,
-                                        window=window,
-                                        horizon=horizon,
-                                        forecast_length=forecast_length,
-                                        monitor_metric=monitor_metric,
-                                        reducelr_patience=reducelr_patience,
-                                        earlystop_patience=earlystop_patience,
-                                        continuous_columns=continuous_columns,
-                                        categorical_columns=categorical_columns)
+        super(InceptionTime, self).__init__(task=task,
+                                            timestamp=timestamp,
+                                            window=window,
+                                            horizon=horizon,
+                                            forecast_length=forecast_length,
+                                            monitor_metric=monitor_metric,
+                                            reducelr_patience=reducelr_patience,
+                                            earlystop_patience=earlystop_patience,
+                                            continuous_columns=continuous_columns,
+                                            categorical_columns=categorical_columns)
 
     def _build_estimator(self, **kwargs):
         model_params = {
             'task': self.task,
             'window': self.window,
-            'rnn_type': self.rnn_type,
+            'blocks': self.blocks,
             'continuous_columns': self.continuous_columns,
             'categorical_columns': self.categorical_columns,
-            'rnn_units': self.rnn_units,
-            'rnn_layers': self.rnn_layers,
-            'drop_rate': self.drop_rate,
+            'cnn_filters': self.cnn_filters,
+            'bottleneck_size': self.bottleneck_size,
+            'kernel_size_list': self.kernel_size_list,
             'nb_outputs': self.meta.classes_,
-            'nb_steps': self.forecast_length,
-            'out_activation': self.out_activation,
+            'shortcut': self.shortcut,
+            'short_filters': self.short_filters,
         }
         model_params = {**model_params, **self.model_kwargs, **kwargs}
-        return HybirdRNNModel(**model_params)
+        return InceptionTimeModel(**model_params)
 
     def _fit(self, train_X, train_y, valid_X, valid_y, **kwargs):
         train_ds = self._from_tensor_slices(X=train_X, y=train_y,
@@ -188,7 +200,7 @@ class HybirdRNN(BaseDeepEstimator):
         if self.summary and kwargs['verbose'] != 0:
             model.summary()
         else:
-            logger.info(f'Number of current Hypird-{self.rnn_type} params: {model.count_params()}')
+            logger.info(f'Number of current InceptionTime params: {model.count_params()}')
 
         model = self._compile_model(model, self.optimizer, self.learning_rate)
 
