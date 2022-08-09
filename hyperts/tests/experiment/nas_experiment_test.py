@@ -1,11 +1,16 @@
-from hyperts.datasets import load_network_traffic, load_arrow_head, load_basic_motions
-from hyperts.utils import consts, metrics, get_tool_box
-from hyperts.experiment import make_experiment
-from hyperts.tests import skip_if_not_prophet
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
+from hyperts.datasets import load_network_traffic, load_arrow_head, load_basic_motions
+from hyperts.utils import consts, metrics
+from hyperts.utils._base import get_tool_box
+from hyperts.experiment import make_experiment
+from hyperts.tests import skip_if_not_tf
+
+
+@skip_if_not_tf
 class Test_Experiment():
 
-    @skip_if_not_prophet
     def test_univariate_forecast(self):
         df = load_network_traffic(univariate=True)
         tb = get_tool_box(df)
@@ -18,15 +23,15 @@ class Test_Experiment():
         optimize_direction = consts.OptimizeDirection_MINIMIZE
 
         exp = make_experiment(train_df.copy(),
-                              mode='stats',
+                              mode='nas',
                               timestamp=timestamp,
                               covariables=covariables,
                               task=task,
-                              callbacks=None,
+                              cv=False,
                               reward_metric=reward_metric,
                               optimize_direction=optimize_direction)
 
-        model = exp.run(max_trials=3)
+        model = exp.run(max_trials=3, epochs=2, final_train_epochs=2)
 
         X_test, y_test = model.split_X_y(test_df.copy())
 
@@ -47,15 +52,15 @@ class Test_Experiment():
         optimize_direction = consts.OptimizeDirection_MINIMIZE
 
         exp = make_experiment(train_df.copy(),
-                              mode='stats',
+                              mode='nas',
                               timestamp=timestamp,
                               covariables=covariables,
                               task=task,
-                              callbacks=None,
+                              cv=False,
                               reward_metric=reward_metric,
                               optimize_direction=optimize_direction)
 
-        model = exp.run(max_trials=3)
+        model = exp.run(max_trials=3, epochs=2, final_train_epochs=2)
 
         X_test, y_test = model.split_X_y(test_df.copy())
 
@@ -67,7 +72,7 @@ class Test_Experiment():
     def test_univariate_classification(self):
         df = load_arrow_head()
         tb = get_tool_box(df)
-        train_df, test_df = tb.random_train_test_split(df, test_size=0.2)
+        train_df, test_df = tb.random_train_test_split(df, test_size=0.2, random_state=9527)
 
         target = 'target'
         task = consts.Task_CLASSIFICATION
@@ -75,14 +80,16 @@ class Test_Experiment():
         optimize_direction = consts.OptimizeDirection_MAXIMIZE
 
         exp = make_experiment(train_df.copy(),
-                              mode='stats',
+                              mode='nas',
                               task=task,
+                              cv=False,
                               eval_data=test_df.copy(),
                               target=target,
                               reward_metric=reward_metric,
+                              random_state=9527,
                               optimize_direction=optimize_direction)
 
-        model = exp.run(max_trials=3)
+        model = exp.run(max_trials=3, epochs=2, final_train_epochs=2)
 
         X_test, y_test = model.split_X_y(test_df.copy())
 
@@ -96,7 +103,7 @@ class Test_Experiment():
     def test_multivariate_classification(self):
         df = load_basic_motions()
         tb = get_tool_box(df)
-        train_df, test_df = tb.random_train_test_split(df, test_size=0.2)
+        train_df, test_df = tb.random_train_test_split(df, test_size=0.2, random_state=9527)
 
         target = 'target'
         task = consts.Task_CLASSIFICATION
@@ -104,14 +111,16 @@ class Test_Experiment():
         optimize_direction = consts.OptimizeDirection_MAXIMIZE
 
         exp = make_experiment(train_df.copy(),
-                              mode='stats',
+                              mode='nas',
                               task=task,
+                              cv=False,
                               eval_data=test_df.copy(),
                               target=target,
                               reward_metric=reward_metric,
+                              random_state=9527,
                               optimize_direction=optimize_direction)
 
-        model = exp.run(max_trials=3)
+        model = exp.run(max_trials=3, epochs=2, final_train_epochs=2)
 
         X_test, y_test = model.split_X_y(test_df.copy())
 

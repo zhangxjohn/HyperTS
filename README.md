@@ -1,14 +1,19 @@
 <h1 align="center">
-<img src="docs/static/images/logo.svg" width="400" align=center/>
+<img src="docs/static/images/logo.png" width="400" align=center/>
 </h1><br>
 
-[简体中文](README_zh_CN.md)
+<h4 align="center">Statistics | Deep Learning | Neural Architecture Search</h4>
+
+<div align="center">
+
+[简体中文](README_zh_CN.md) • [Installation](https://hyperts.readthedocs.io/en/latest/contents/0200_installation.html) • [Documentation](https://hyperts.readthedocs.io/en/latest/) • [Examples](https://github.com/DataCanvasIO/HyperTS/tree/main/examples) 
 
 [![Python Versions](https://img.shields.io/pypi/pyversions/hyperts.svg)](https://pypi.org/project/hyperts)
 [![pypi](https://img.shields.io/pypi/v/hyperts.svg)](https://pypi.python.org/pypi/hyperts)
 [![conda](https://img.shields.io/conda/vn/conda-forge/HyperTS.svg)](https://anaconda.org/conda-forge/HyperTS)
 [![TensorFlow Versions](https://img.shields.io/badge/TensorFlow-2.0+-blue.svg)](https://pypi.org/project/hyperts)
 [![License](https://img.shields.io/github/license/DataCanvasIO/hyperts.svg)](https://github.com/DataCanvasIO/hyperts/blob/master/LICENSE)
+</div>
 
 :dizzy: Easy-to-use, powerful, unified full pipeline automated time series toolkit. Supports forecasting, classification and regression.
 
@@ -112,7 +117,7 @@ train_data, test_data = train_test_split(data, test_size=0.2)
 model = make_experiment(train_data.copy(),
                         task='classification',
                         mode='dl',
-                        dl_gpu_usage_strategy=1,
+                        tf_gpu_usage_strategy=1,
                         reward_metric='accuracy',
                         max_trials=30,
                         early_stopping_rounds=10).run()
@@ -149,7 +154,7 @@ HyperTS supports the following features:
 
 **Multi-task Support:** Time series forecasting, classification, and regression.
 
-**Multi-mode Support:** A large collection of TS models, including statistical models (Prophet, ARIMA, VAR, etc.), deep learning models(DeepAR, GRU, LSTNet, NBeats, etc.), and neural architecture search (to be developed).
+**Multi-mode Support:** A large collection of TS models, including statistical models (Prophet, ARIMA, VAR, etc.), deep learning models(DeepAR, GRU, LSTNet, NBeats, etc.), and neural architecture search.
 
 **Multi-variate Support:** From univariate to multivariate time series.
 

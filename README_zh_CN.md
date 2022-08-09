@@ -1,14 +1,19 @@
 <h1 align="center">
-<img src="docs/static/images/logo.svg" width="400" align=center/>
+<img src="docs/static/images/logo.png" width="400" align=center/>
 </h1><br>
 
-[English](README.md)
+<h4 align="center">Statistics | Deep Learning | Neural Architecture Search</h4>
+
+<div align="center">
+
+[English](README.md) • [安装指南](https://hyperts.readthedocs.io/zh_CN/latest/contents/0200_installation.html) • [中文文档](https://hyperts.readthedocs.io/zh_CN/latest/) • [中文示例](https://github.com/DataCanvasIO/HyperTS/tree/main/examples/zh_CN)
 
 [![Python Versions](https://img.shields.io/pypi/pyversions/hyperts.svg)](https://pypi.org/project/hyperts)
 [![pypi](https://img.shields.io/pypi/v/hyperts.svg)](https://pypi.python.org/pypi/hyperts)
 [![conda](https://img.shields.io/conda/vn/conda-forge/HyperTS.svg)](https://anaconda.org/conda-forge/HyperTS)
 [![TensorFlow Versions](https://img.shields.io/badge/TensorFlow-2.0+-blue.svg)](https://pypi.org/project/hyperts)
 [![License](https://img.shields.io/github/license/DataCanvasIO/hyperts.svg)](https://github.com/DataCanvasIO/hyperts/blob/master/LICENSE)
+</div>
 
 :dizzy: 易用，高效，统一的全管道自动时间序列分析工具，支持时间序列预测，分类及回归。
 
@@ -111,7 +116,7 @@ train_data, test_data = train_test_split(data, test_size=0.2)
 model = make_experiment(train_data.copy(),
                         task='classification',
                         mode='dl',
-                        dl_gpu_usage_strategy=1,
+                        tf_gpu_usage_strategy=1,
                         reward_metric='accuracy',
                         max_trials=30,
                         early_stopping_rounds=10).run()
@@ -150,7 +155,7 @@ HyperTS支持以下特性:
 
 **多任务支持:** 时间序列预测、分类及回归。
 
-**多模式支持:** 大量的时序模型，从统计模型到深度学习模型，再到神经架构搜索(开发中)。
+**多模式支持:** 大量的时序模型，从统计模型到深度学习模型，再到神经架构搜索。
 
 **多变量支持:** 支持从单变量到多变量时间序列任务。
 

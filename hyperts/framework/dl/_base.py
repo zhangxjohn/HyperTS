@@ -751,14 +751,14 @@ class BaseDeepEstimator(object):
 
         dataset = tf.data.Dataset.from_tensor_slices((data, y))
 
+        if epochs is not None:
+            dataset = dataset.repeat(epochs+1)
+
         if shuffle:
             dataset = dataset.shuffle(y.shape[0])
 
         dataset = dataset.batch(batch_size, drop_remainder=drop_remainder and y.shape[0] >= batch_size)
         dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
-
-        if epochs is not None:
-            dataset = dataset.repeat(epochs+1)
 
         return dataset
 
@@ -818,29 +818,43 @@ class BaseDeepEstimator(object):
         """
         plot_model(self.model, to_file=f'{model_file}/model.png', show_shapes=True)
 
-    def save_model(self, model_file, name='dl_model'):
+    def save_model(self, model_file, name='dl_model', external=False):
         """Save the instance object.
 
         """
         import h5py, io
+
+        if external:
+            open_func = open
+        else:
+            open_func = fs.open
+
         if model_file.endswith('.pkl'):
             model_file = os.path.splitext(model_file)[0]
-        with fs.open(f'{model_file}_{name}.h5', "wb") as fw:
+        with open_func(f'{model_file}_{name}.h5', "wb") as fw:
             buf = io.BytesIO()
             with h5py.File(buf, 'w') as h:
                 save_model(self.model, h, save_format='h5')
             data = buf.getvalue()
             buf.close()
             fw.write(data)
+        del self.model
         self.model = None
+        tf.keras.backend.clear_session()
         logger.info('Save model to disk.')
 
     @staticmethod
-    def load_model(model_file, name='dl_model'):
+    def load_model(model_file, name='dl_model', external=False):
         """Load the instance object.
 
         """
         import h5py, io
+
+        if external:
+            open_func = open
+        else:
+            open_func = fs.open
+
         try:
             from tensorflow.python import keras
             from hyperts.framework.dl.dl_utils.saveconfig import compile_args_from_training_config
@@ -856,7 +870,7 @@ class BaseDeepEstimator(object):
 
         if model_file.endswith('.pkl'):
             model_file = os.path.splitext(model_file)[0]
-        with fs.open(f'{model_file}_{name}.h5', "rb") as fp:
+        with open_func(f'{model_file}_{name}.h5', "rb") as fp:
             data = fp.read()
         buf = io.BytesIO(data)
         del data

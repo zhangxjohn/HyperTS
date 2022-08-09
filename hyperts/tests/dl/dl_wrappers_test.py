@@ -6,13 +6,14 @@ from hyperts.datasets import *
 from hyperts.utils.metrics import rmse, mape, accuracy_score
 from hyperts.utils import consts
 from hyperts.utils import get_tool_box
-from hyperts.framework.wrappers.dl_wrappers import DeepARWrapper, HybirdRNNWrapper, \
-                                LSTNetWrapper, NBeatsWrapper, InceptionTimeWrapper
+from hyperts.tests import skip_if_not_tf
 
-
+@skip_if_not_tf
 class Test_DL_Wrappers():
 
     def test_univariate_forecast_deepar(self):
+        from hyperts.framework.wrappers.dl_wrappers import DeepARWrapper
+
         X, y = load_random_univariate_forecast_dataset(return_X_y=True)
         tb = get_tool_box(X)
         X = tb.simple_numerical_imputer(X, mode='mode')
@@ -50,6 +51,8 @@ class Test_DL_Wrappers():
 
 
     def test_univariate_forecast_rnn(self):
+        from hyperts.framework.wrappers.dl_wrappers import HybirdRNNWrapper
+
         X, y = load_random_univariate_forecast_dataset(return_X_y=True)
         tb = get_tool_box(X)
         X = tb.simple_numerical_imputer(X, mode='mode')
@@ -89,6 +92,8 @@ class Test_DL_Wrappers():
 
 
     def test_multivariate_forecast_with_covariables_rnn(self):
+        from hyperts.framework.wrappers.dl_wrappers import HybirdRNNWrapper
+
         X, y = load_network_traffic(return_X_y=True)
         tb = get_tool_box(X)
         y = tb.simple_numerical_imputer(y)
@@ -129,6 +134,8 @@ class Test_DL_Wrappers():
 
 
     def test_multivariate_forecast_no_covariables_rnn(self):
+        from hyperts.framework.wrappers.dl_wrappers import HybirdRNNWrapper
+
         X, y = load_network_traffic(return_X_y=True)
         tb = get_tool_box(X)
         y = tb.simple_numerical_imputer(y)
@@ -169,6 +176,8 @@ class Test_DL_Wrappers():
 
 
     def test_univariate_classification_rnn(self):
+        from hyperts.framework.wrappers.dl_wrappers import HybirdRNNWrapper
+
         X, y = load_arrow_head(return_X_y=True)
         tb = get_tool_box(X)
         X_train, X_test, y_train, y_test = tb.random_train_test_split(X, y, test_size=0.2)
@@ -203,6 +212,8 @@ class Test_DL_Wrappers():
 
 
     def test_multivariate_classification_rnn(self):
+        from hyperts.framework.wrappers.dl_wrappers import HybirdRNNWrapper
+
         X, y = load_basic_motions(return_X_y=True)
         tb = get_tool_box(X)
         X_train, X_test, y_train, y_test = tb.random_train_test_split(X, y, test_size=0.2)
@@ -235,6 +246,8 @@ class Test_DL_Wrappers():
 
 
     def test_univariate_forecast_lstnet(self):
+        from hyperts.framework.wrappers.dl_wrappers import LSTNetWrapper
+
         X, y = load_random_univariate_forecast_dataset(return_X_y=True)
         tb = get_tool_box(X)
         X = tb.simple_numerical_imputer(X, mode='mode')
@@ -281,6 +294,8 @@ class Test_DL_Wrappers():
 
 
     def test_multivariate_forecast_with_covariables_lstnet(self):
+        from hyperts.framework.wrappers.dl_wrappers import LSTNetWrapper
+
         X, y = load_network_traffic(return_X_y=True)
         tb = get_tool_box(X)
         y = tb.simple_numerical_imputer(y)
@@ -327,6 +342,8 @@ class Test_DL_Wrappers():
 
 
     def test_multivariate_forecast_no_covariables_lstnet(self):
+        from hyperts.framework.wrappers.dl_wrappers import LSTNetWrapper
+
         X, y = load_network_traffic(return_X_y=True)
         tb = get_tool_box(X)
         y = tb.simple_numerical_imputer(y)
@@ -374,6 +391,8 @@ class Test_DL_Wrappers():
 
 
     def test_univariate_classification_lstnet(self):
+        from hyperts.framework.wrappers.dl_wrappers import LSTNetWrapper
+
         X, y = load_arrow_head(return_X_y=True)
         tb = get_tool_box(X)
         X_train, X_test, y_train, y_test = tb.random_train_test_split(X, y, test_size=0.2)
@@ -387,7 +406,7 @@ class Test_DL_Wrappers():
         init_kwargs = {
             'task': task,
 
-            'rnn_type': 'simple_rnn',
+            'rnn_type': 'gru',
             'rnn_units': 10,
             'rnn_layers': 2,
             'learning_rate': 0.001,
@@ -395,7 +414,7 @@ class Test_DL_Wrappers():
             'x_scale': np.random.choice(['min_max', 'max_abs'], size=1)[0],
         }
 
-        model = HybirdRNNWrapper(fit_kwargs, **init_kwargs)
+        model = LSTNetWrapper(fit_kwargs, **init_kwargs)
         model.fit(X_train, y_train)
 
         y_pred = model.predict(X_test)
@@ -407,6 +426,8 @@ class Test_DL_Wrappers():
 
 
     def test_multivariate_classification_lstnet(self):
+        from hyperts.framework.wrappers.dl_wrappers import LSTNetWrapper
+
         X, y = load_basic_motions(return_X_y=True)
         tb = get_tool_box(X)
         X_train, X_test, y_train, y_test = tb.random_train_test_split(X, y, test_size=0.2)
@@ -447,6 +468,8 @@ class Test_DL_Wrappers():
 
 
     def test_univariate_forecast_nbeats(self):
+        from hyperts.framework.wrappers.dl_wrappers import NBeatsWrapper
+
         X, y = load_random_univariate_forecast_dataset(return_X_y=True)
         tb = get_tool_box(X)
         X = tb.simple_numerical_imputer(X, mode='mode')
@@ -482,6 +505,8 @@ class Test_DL_Wrappers():
 
 
     def test_multivariate_forecast_no_covariables_nbeats(self):
+        from hyperts.framework.wrappers.dl_wrappers import NBeatsWrapper
+
         X, y = load_network_traffic(return_X_y=True)
         tb = get_tool_box(X)
         y = tb.simple_numerical_imputer(y)
@@ -518,6 +543,8 @@ class Test_DL_Wrappers():
 
 
     def test_multivariate_forecast_with_covariables_nbeats(self):
+        from hyperts.framework.wrappers.dl_wrappers import NBeatsWrapper
+
         X, y = load_network_traffic(return_X_y=True)
         tb = get_tool_box(X)
         y = tb.simple_numerical_imputer(y)
@@ -553,6 +580,8 @@ class Test_DL_Wrappers():
 
 
     def test_univariate_classification_inception(self):
+        from hyperts.framework.wrappers.dl_wrappers import InceptionTimeWrapper
+
         X, y = load_arrow_head(return_X_y=True)
         tb = get_tool_box(X)
         X_train, X_test, y_train, y_test = tb.random_train_test_split(X, y, test_size=0.2)
@@ -585,6 +614,8 @@ class Test_DL_Wrappers():
 
 
     def test_multivariate_classification_inception(self):
+        from hyperts.framework.wrappers.dl_wrappers import InceptionTimeWrapper
+
         X, y = load_basic_motions(return_X_y=True)
         tb = get_tool_box(X)
         X_train, X_test, y_train, y_test = tb.random_train_test_split(X, y, test_size=0.2)
