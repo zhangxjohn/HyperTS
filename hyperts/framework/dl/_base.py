@@ -482,9 +482,14 @@ class BaseDeepEstimator(object):
         else:
             raise ValueError('X is missing the timestamp columns.')
 
+        forecast_steps = steps
         if steps < self.forecast_length:
-            raise ValueError(f'Forecast steps {steps} cannot be '
-                             f'less than forecast length {self.forecast_length}.')
+            aligning_steps = self.forecast_length - steps
+            steps = self.forecast_length
+            tail_data = np.reshape(X.values[-1, :], (1, -1))
+            aligning_X = np.repeat(tail_data, repeats=aligning_steps, axis=0)
+            aligning_X = pd.DataFrame(aligning_X, columns=X.columns)
+            X = pd.concat([X, aligning_X], axis=0)
 
         if X.shape[1] >= 1:
             X = self.meta.transform_X(X)
@@ -525,6 +530,7 @@ class BaseDeepEstimator(object):
 
         futures = np.concatenate(futures, axis=0)
         futures = futures.reshape(-1, len(self.meta.target_columns))[:steps]
+        futures = futures[:forecast_steps, :]
 
         logger.info(f'forecast taken {time.time() - start}s')
         return futures
@@ -543,6 +549,9 @@ class BaseDeepEstimator(object):
         probs = np.concatenate(probs, axis=0)
         if probs.shape[-1] == 1 and self.task in consts.TASK_LIST_CLASSIFICATION:
             probs = np.hstack([1 - probs, probs])
+        elif probs.shape[-1] == 1 and self.task in consts.TASK_LIST_REGRESSION:
+            probs = self.meta.inverse_transform_y(probs)
+
         return probs
 
     def proba2predict(self, proba, encode_to_label=True):
@@ -776,7 +785,7 @@ class BaseDeepEstimator(object):
             dtype, input_name) about categorical variables.
         """
         if isinstance(X.iloc[0, 0], (np.ndarray, pd.Series)):
-            self.meta = MetaTSCprocessor()
+            self.meta = MetaTSCprocessor(task=self.task)
             X, y = self.meta.fit_transform(X, y)
             self.continuous_columns = self.meta.continuous_columns
             self.categorical_columns = self.meta.categorical_columns
