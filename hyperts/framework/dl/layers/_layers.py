@@ -292,8 +292,9 @@ class RevInstanceNormalization(layers.Layer):
 
     def _get_statistics(self, x):
         dim2reduce = tuple(range(1, len(x.shape) - 1))
-        self.mean = K.mean(x, axis=dim2reduce, keepdims=True)
-        self.stdev = K.sqrt(K.var(x, axis=dim2reduce, keepdims=True) + self.eps)
+        self.mean = K.stop_gradient(K.mean(x, axis=dim2reduce, keepdims=True))
+        self.stdev = K.stop_gradient(K.sqrt(K.var(x, axis=dim2reduce, keepdims=True) + self.eps))
+        print(self.stdev)
 
     def _normalize(self, x):
         x = x - self.mean
@@ -471,6 +472,27 @@ class FactorizedReduce(layers.Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+class Sampling(layers.Layer):
+    """Reparametrisation by sampling from Gaussian  N(0,I).
+
+    Parampers
+    ----------
+    
+    """
+    def __init__(self, **kwargs):
+        super(Sampling, self).__init__(**kwargs)
+
+    def call(self, inputs, **kwargs):
+        z_mean, z_log_var = inputs
+        epsilon = K.random_normal(shape=K.shape(z_mean))
+        return z_mean + K.exp(0.5 * z_log_var) * epsilon
+
+    def get_config(self):
+        config = {}
+        base_config = super(Sampling, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
 def build_input_head(window, continuous_columns, categorical_columns):
     """Build the input head. An input variable may have two parts: continuous variables
        and categorical variables.
@@ -576,14 +598,14 @@ def rnn_forward(x, nb_units, nb_layers, rnn_type, name, drop_rate=0., i=0, activ
         recurrent neural network.
     nb_layers: int, the number of the layers for recurrent neural network.
     rnn_type: str, type of recurrent neural network,
-        including {'simple_rnn', 'gru', 'lstm'}.
+        including {'basic', 'gru', 'lstm'}.
     name: recurrent neural network name.
     drop_rate: float, the rate of Dropout for neural nets, default 0.
     return_sequences: bool, whether to return the last output. in the output
         sequence, or the full sequence. default False.
     """
 
-    RnnCell = {'lstm': layers.LSTM, 'gru': layers.GRU, 'simple_rnn': layers.SimpleRNN}[rnn_type]
+    RnnCell = {'lstm': layers.LSTM, 'gru': layers.GRU, 'basic': layers.SimpleRNN}[rnn_type]
     for i in range(nb_layers - 1):
         x = RnnCell(units=nb_units,
                     activation=activation,
@@ -611,5 +633,6 @@ layers_custom_objects = {
     'Identity': Identity,
     'Shortcut': Shortcut,
     'InceptionBlock': InceptionBlock,
-    'FactorizedReduce': FactorizedReduce
+    'FactorizedReduce': FactorizedReduce,
+    'Sampling': Sampling,
 }

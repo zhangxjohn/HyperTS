@@ -2,11 +2,8 @@
 """
 
 """
-import os
 import copy
-import pickle
 import numpy as np
-from sklearn.pipeline import Pipeline
 
 from hypernets.core import set_random_state
 from hypernets.experiment.compete import SteppedExperiment, ExperimentStep, \
@@ -15,6 +12,7 @@ from hypernets.experiment.compete import SteppedExperiment, ExperimentStep, \
 from hypernets.utils import logging
 
 from hyperts.utils import consts, get_tool_box
+from hyperts.toolbox import generate_anomaly_pseudo_ground_truth
 from hyperts.utils.plot import plot_plotly, plot_mpl, enable_plotly, enable_mpl
 
 logger = logging.get_logger(__name__)
@@ -31,7 +29,8 @@ class TSFDataPreprocessStep(ExperimentStep):
 
     def __init__(self, experiment, name, timestamp_col=None, freq=None,
                  cv=False, covariate_cols=None, covariate_cleaner=None,
-                 ensemble_size=None, train_data_periods=None):
+                 ensemble_size=None, train_data_periods=None,
+                 anomaly_label_col=None, contamination=0.05):
         super().__init__(experiment, name)
 
         timestamp_col = [timestamp_col] if isinstance(timestamp_col, str) else timestamp_col
@@ -46,6 +45,8 @@ class TSFDataPreprocessStep(ExperimentStep):
         self.covariate_cols = covariate_cols
         self.covariate_cleaner = covariate_cleaner
         self.train_data_periods = train_data_periods
+        self.anomaly_label_col = anomaly_label_col
+        self.contamination = contamination
         self.timestamp_col = timestamp_col if timestamp_col is not None else consts.TIMESTAMP
 
     def fit_transform(self, hyper_model, X_train, y_train, X_test=None, X_eval=None, y_eval=None, **kwargs):
@@ -76,10 +77,10 @@ class TSFDataPreprocessStep(ExperimentStep):
 
         self.history_prior = tb.df_mean_std(y_train)
 
-        # 4. eval variables data process
+        # 3. eval variables data process
         if not self.cv:
             if X_eval is None or y_eval is None:
-                if self.task in consts.TASK_LIST_FORECAST:
+                if self.task in consts.TASK_LIST_FORECAST + consts.TASK_LIST_DETECTION:
                     period = tb.fft_infer_period(y_train.iloc[:, 0])
                     if isinstance(self.experiment.eval_size, int):
                         eval_horizon = self.experiment.eval_size
@@ -98,6 +99,27 @@ class TSFDataPreprocessStep(ExperimentStep):
                 X_eval, y_eval = eval_Xy[excluded_cols], eval_Xy[target_cols]
                 self.step_progress('transform eval set')
 
+        if self.task in consts.TASK_LIST_DETECTION:
+            if self.anomaly_label_col is None:
+                train_y, eval_y = generate_anomaly_pseudo_ground_truth(
+                                  X_train=y_train,
+                                  X_test=y_eval,
+                                  contamination=self.contamination,
+                                  random_state=9527)
+                anomaly_label_col = consts.TARGET
+            else:
+                train_y = y_train.pop(self.anomaly_label_col)
+                eval_y = y_eval.pop(self.anomaly_label_col)
+                anomaly_label_col = self.anomaly_label_col
+
+            X_train = tb.concat_df([X_train, y_train], axis=1)
+            y_train = tb.DataFrame(train_y, columns=[anomaly_label_col])
+            if X_eval is not None or y_eval is not None:
+                X_eval = tb.concat_df([X_eval, y_eval], axis=1)
+                y_eval = tb.DataFrame(eval_y, columns=[anomaly_label_col])
+        else:
+            anomaly_label_col = None
+
         # 4. compute new data shape
         data_shapes = {'X_train.shape': tb.get_shape(X_train),
                        'y_train.shape': tb.get_shape(y_train),
@@ -108,7 +130,10 @@ class TSFDataPreprocessStep(ExperimentStep):
 
         # 5. reset part parameters
         self.data_shapes = data_shapes
-        self.target_cols = target_cols
+        if self.task in consts.TASK_LIST_DETECTION:
+            self.target_cols = anomaly_label_col
+        else:
+            self.target_cols = target_cols
 
         return hyper_model, X_train, y_train, X_test, X_eval, y_eval
 
@@ -330,7 +355,7 @@ class TSEnsembleStep(EnsembleStep):
         if self.retrain_on_wholedata:
             estimators = self.est_retrain(trials, hyper_model, X_train, y_train, X_eval, y_eval, weights, **kwargs)
         else:
-            estimators = np.where(weights > 0, estimators, None)
+            estimators = np.where(np.array(weights) > 0, estimators, None)
 
         ensemble.estimators = list(estimators)
 
@@ -341,7 +366,7 @@ class TSEnsembleStep(EnsembleStep):
         target_dims = tb.get_shape(tb.DataFrame(y_train))[1]
         if self.task in consts.TASK_LIST_FORECAST + consts.TASK_LIST_REGRESSION:
             ensemble_task = 'regression'
-        elif 'binary' in self.task:
+        elif 'binary' in self.task or self.task in consts.TASK_LIST_DETECTION:
             ensemble_task = 'binary'
         else:
             ensemble_task = 'multiclass'
@@ -431,7 +456,7 @@ class TSPipeline:
         self.covariables = covariables
 
         self.sk_pipeline = sk_pipeline
-        if self.task in consts.TASK_LIST_FORECAST:
+        if self.task in consts.TASK_LIST_FORECAST + consts.TASK_LIST_DETECTION:
             self.prior = sk_pipeline.named_steps.data_preprocessing.history_prior
             self.history = history
 
@@ -453,7 +478,7 @@ class TSPipeline:
             (covariate_1) indicates that it may not exist.
         """
         tb = get_tool_box(X)
-        if self.task in consts.TASK_LIST_FORECAST:
+        if self.task in consts.TASK_LIST_FORECAST + consts.TASK_LIST_DETECTION:
             if self.mode == consts.Mode_DL:
                 if forecast_start is not None:
                     self.history = copy.deepcopy(forecast_start)
@@ -462,7 +487,8 @@ class TSPipeline:
                     if X_timestamp_start <= forecast_timestamp_end:
                         raise ValueError(f'The start date of X [{X_timestamp_start}] should be after '
                                          f'the end date of forecast_start [{forecast_timestamp_end}].')
-                self.__preprocess_forecast_start(self.history)
+                if self.task in consts.TASK_LIST_FORECAST:
+                    self.__preprocess_forecast_start(self.history)
 
             if X[self.timestamp].dtypes == object:
                 X[self.timestamp] = tb.to_datetime(X[self.timestamp])
@@ -474,7 +500,12 @@ class TSPipeline:
 
             y_pred = self.sk_pipeline.predict(X_transformed)
 
-            forecast = tb.DataFrame(y_pred, columns=self.target)
+            if self.task in consts.TASK_LIST_DETECTION:
+                y_proba = self.sk_pipeline.predict_proba(X_transformed)
+                forecast = tb.DataFrame(y_pred, columns=[consts.ANOMALY_LABEL])
+                forecast[consts.ANOMALY_CONFIDENCE] = y_proba[:, 1]
+            else:
+                forecast = tb.DataFrame(y_pred, columns=self.target)
             forecast = tb.concat_df([X_transformed[[self.timestamp]], forecast], axis=1)
             forecast = tb.join_df(X[[self.timestamp]], forecast, on=self.timestamp)
 
@@ -494,7 +525,7 @@ class TSPipeline:
         X: 'DataFrame'.
             X.columns = [variate_1, variate_2,...].
         """
-        if self.task in consts.TASK_LIST_CLASSIFICATION:
+        if self.task in consts.TASK_LIST_CLASSIFICATION + consts.TASK_LIST_DETECTION:
             y_proba = self.sk_pipeline.predict_proba(X)
         else:
             raise ValueError('predict_proba is used for classification only.')
@@ -531,12 +562,17 @@ class TSPipeline:
             metrics = ['mae', 'mse', 'rmse', 'mape', 'smape']
         elif self.task in consts.TASK_LIST_CLASSIFICATION and metrics is None:
             metrics = ['accuracy', 'f1', 'precision', 'recall']
+        elif self.task in consts.TASK_LIST_DETECTION and metrics is None:
+            metrics = ['f1', 'precision', 'recall', 'roc_auc_score']
 
+        tb = get_tool_box(y_pred)
         if self.task in consts.TASK_LIST_FORECAST:
-            tb = get_tool_box(y_pred)
             y_pred = tb.df_to_array(y_pred[self.target])
 
-        if 'binaryclass' in self.task:
+        if self.task in consts.TASK_LIST_DETECTION:
+            y_pred = tb.df_to_array(y_pred[[consts.ANOMALY_LABEL]])
+
+        if 'binaryclass' in self.task or self.task in consts.TASK_LIST_DETECTION:
             task = 'binary'
         elif 'multiclass' in self.task:
             task = 'multiclass'
@@ -618,8 +654,20 @@ class TSPipeline:
         ----------
         fig : 'plotly.graph_objects.Figure'.
         """
-        forecast_interval = self.forecast_interval(forecast)
         history = history if history is not None else self.history
+
+        if self.task in consts.TASK_LIST_FORECAST:
+            forecast_interval = self.forecast_interval(forecast)
+        else:
+            forecast_interval = None
+
+        if self.task in consts.TASK_LIST_DETECTION:
+            assert actual is not None, 'actual can not be None in anomaly detection task.'
+
+        plot_options = {
+            'task': self.task,
+            'anomaly_detection_label': self.kwargs.get('anomaly_detection_label'),
+        }
 
         if interactive and enable_plotly:
             plot_plotly(forecast,
@@ -630,7 +678,8 @@ class TSPipeline:
                         history=history,
                         forecast_interval=forecast_interval,
                         show_forecast_interval=show_forecast_interval,
-                        include_history=False if history is None else True)
+                        include_history=False if history is None else True,
+                        **plot_options)
         elif not interactive and enable_mpl:
             plot_mpl(forecast,
                      timestamp_col=self.timestamp,
@@ -641,7 +690,8 @@ class TSPipeline:
                      forecast_interval=forecast_interval,
                      show_forecast_interval=show_forecast_interval,
                      include_history=False if history is None else True,
-                     figsize=figsize)
+                     figsize=figsize,
+                     **plot_options)
         else:
             raise ValueError('No install matplotlib or plotly.')
 
@@ -697,7 +747,7 @@ class TSPipeline:
         -------
         X, y.
         """
-        if self.task in consts.TASK_LIST_FORECAST:
+        if self.task in consts.TASK_LIST_FORECAST + consts.TASK_LIST_DETECTION:
             tb = get_tool_box(data)
             data = tb.reset_index(data)
             is_skip = self.timestamp in tb.columns_values(data)
@@ -714,6 +764,9 @@ class TSPipeline:
                 excluded_variables = tb.list_diff(tb.columns_values(data), self.target)
             else:
                 excluded_variables = [self.timestamp]
+
+            data = tb.sort_values(data, ts_name=self.timestamp)
+
             data = tb.drop_duplicated_ts_rows(data, ts_name=self.timestamp)
 
             if smooth is not False:
@@ -722,7 +775,14 @@ class TSPipeline:
             if impute is not False:
                 data[self.target] = tb.multi_period_loop_imputer(data[self.target], freq=self.freq)
 
-            X, y = data[excluded_variables], data[self.target]
+            if self.task in consts.TASK_LIST_FORECAST:
+                X, y = data[excluded_variables], data[self.target]
+            else:
+                X = data
+                if self.kwargs.get('anomaly_label_col') is not None:
+                    y = X.pop(self.kwargs.get('anomaly_label_col'))
+                else:
+                    y = None
         else:
             X = data
             y = X.pop(self.target)
@@ -891,6 +951,7 @@ class TSCompeteExperiment(SteppedExperiment):
                  target_col=None,
                  timestamp_col=None,
                  covariate_cols=None,
+                 anomaly_label_col=None,
                  covariate_cleaner=None,
                  cv=False,
                  num_folds=3,
@@ -899,6 +960,7 @@ class TSCompeteExperiment(SteppedExperiment):
                  id=None,
                  forecast_train_data_periods=None,
                  hist_store_upper_limit=consts.HISTORY_UPPER_LIMIT,
+                 contamination=consts.CONTAMINATION,
                  callbacks=None,
                  log_level=None,
                  random_state=None,
@@ -924,7 +986,7 @@ class TSCompeteExperiment(SteppedExperiment):
         self.max_window_length = hist_store_upper_limit
         self.train_end_date = kwargs.pop('train_end_date', None)
         self.generate_freq = kwargs.pop('generate_freq', None)
-        if self.task in consts.TASK_LIST_FORECAST:
+        if self.task in consts.TASK_LIST_FORECAST + consts.TASK_LIST_DETECTION:
             tb = get_tool_box(X_train, y_train)
             all_data = tb.concat_df([X_train, y_train], axis=1)
             if X_eval is not None or y_eval is not None:
@@ -944,10 +1006,12 @@ class TSCompeteExperiment(SteppedExperiment):
             self.covariables = None
             cleaned_covariables = None
 
+        self.anomaly_label_col = anomaly_label_col
+
         steps = []
 
         # data clean
-        if task in consts.TASK_LIST_FORECAST:
+        if task in consts.TASK_LIST_FORECAST + consts.TASK_LIST_DETECTION:
             steps.append(TSFDataPreprocessStep(self, consts.StepName_DATA_PREPROCESSING,
                                                freq=freq,
                                                cv=cv,
@@ -955,6 +1019,8 @@ class TSCompeteExperiment(SteppedExperiment):
                                                timestamp_col=timestamp_col,
                                                covariate_cols=cleaned_covariables,
                                                covariate_cleaner=covariate_cleaner,
+                                               anomaly_label_col=anomaly_label_col,
+                                               contamination=contamination,
                                                train_data_periods=forecast_train_data_periods))
         else:
             steps.append(TSCDataPreprocessStep(self, consts.StepName_DATA_PREPROCESSING,
@@ -1042,7 +1108,8 @@ class TSCompeteExperiment(SteppedExperiment):
                           target=self.target,
                           history=self.history,
                           train_end_date=self.train_end_date,
-                          generate_freq=self.generate_freq)
+                          generate_freq=self.generate_freq,
+                          anomaly_label_col=self.anomaly_label_col)
 
     def report_best_trial_params(self):
         """Gets experiment best trial parameters.

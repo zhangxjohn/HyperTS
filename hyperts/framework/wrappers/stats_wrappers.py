@@ -22,7 +22,11 @@ from sktime.classification.distance_based import KNeighborsTimeSeriesClassifier
 from hypernets.utils import logging
 
 from hyperts.utils import get_tool_box
-from hyperts.framework.wrappers import EstimatorWrapper, WrapperMixin, suppress_stdout_stderr
+from hyperts.framework.wrappers import EstimatorWrapper
+from hyperts.framework.wrappers import WrapperMixin
+from hyperts.framework.wrappers import suppress_stdout_stderr
+from hyperts.framework.stats import TSIsolationForest
+from hyperts.framework.stats import TSOneClassSVM
 
 logger = logging.get_logger(__name__)
 
@@ -219,3 +223,78 @@ class KNeighborsWrapper(EstimatorWrapper, WrapperMixin):
     @property
     def classes_(self):
         return self.model.classes_
+
+
+#################################### Define Time Series Anomaly Detection Wrapper ####################################
+class IForestWrapper(EstimatorWrapper, WrapperMixin):
+    """
+    Adapt: univariate/multivariate anomaly detection.
+    """
+    def __init__(self, fit_kwargs, **kwargs):
+        super(IForestWrapper, self).__init__(fit_kwargs, **kwargs)
+        self.model = TSIsolationForest(**self.init_kwargs)
+
+    def fit(self, X, y=None, **kwargs):
+        # adapt for prophet
+        if self.drop_sample_rate:
+            X, y = self.drop_hist_sample(X, y)
+        X = X.drop(columns=[self.timestamp])
+        X = self.fit_transform(X)
+        self.model.fit(X, y)
+        if y is not None:
+            self.y_unique_ = np.unique(y)
+
+    def predict(self, X, **kwargs):
+        X = X.drop(columns=[self.timestamp])
+        X = self.transform(X)
+        pred = self.model.predict(X)
+        if kwargs.get('return_confidence', False) is True:
+            confidence = self.model.predict_confidence(X)
+            return pred, confidence
+        return pred
+
+    def predict_proba(self, X, **kwargs):
+        X = X.drop(columns=[self.timestamp])
+        X = self.transform(X)
+        return self.model.predict_proba(X)
+
+    @property
+    def classes_(self):
+        return self.y_unique_
+
+
+class OneClassSVMWrapper(EstimatorWrapper, WrapperMixin):
+    """
+    Adapt: univariate/multivariate anomaly detection.
+    """
+    def __init__(self, fit_kwargs, **kwargs):
+        super(OneClassSVMWrapper, self).__init__(fit_kwargs, **kwargs)
+        self.model = TSOneClassSVM(**self.init_kwargs)
+
+    def fit(self, X, y=None, **kwargs):
+        # adapt for prophet
+        if self.drop_sample_rate:
+            X, y = self.drop_hist_sample(X, y)
+        X = X.drop(columns=[self.timestamp])
+        X = self.fit_transform(X)
+        self.model.fit(X, y)
+        if y is not None:
+            self.y_unique_ = np.unique(y)
+
+    def predict(self, X, **kwargs):
+        X = X.drop(columns=[self.timestamp])
+        X = self.transform(X)
+        pred = self.model.predict(X)
+        if kwargs.get('return_confidence', False) is True:
+            confidence = self.model.predict_confidence(X)
+            return pred, confidence
+        return pred
+
+    def predict_proba(self, X, **kwargs):
+        X = X.drop(columns=[self.timestamp])
+        X = self.transform(X)
+        return self.model.predict_proba(X)
+
+    @property
+    def classes_(self):
+        return self.y_unique_

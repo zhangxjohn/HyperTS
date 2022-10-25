@@ -9,6 +9,7 @@ NAN_DROP_SIZE                      = 0.6
 TRAINING_EPOCHS                    = 60
 FINAL_TRAINING_EPOCHS              = 240
 HISTORY_UPPER_LIMIT                = 200
+CONTAMINATION                      = 0.05
 
 DISCRETE_FORECAST                  = 'null'
 MISSING_TIMESTAMP                  = 'null'
@@ -19,9 +20,12 @@ Task_UNIVARIATE_BINARYCLASS        = 'univariate-binaryclass'
 Task_MULTIVARIATE_BINARYCLASS      = 'multivariate-binaryclass'
 Task_UNIVARIATE_MULTICALSS         = 'univariate-multiclass'
 Task_MULTIVARIATE_MULTICALSS       = 'multivariate-multiclass'
+Task_UNIVARIATE_DETECTION          = 'univariate-detection'
+Task_MULTIVARIATE_DETECTION        = 'multivariate-detection'
 Task_FORECAST                      = 'forecast'
 Task_CLASSIFICATION                = 'classification'
 Task_REGRESSION                    = 'regression'
+Task_DETECTION                     = 'detection'
 
 TASK_LIST_FORECAST                 = ['forecast', 'tsf',
 'univariate-forecast', 'multivariate-forecast'
@@ -33,6 +37,10 @@ TASK_LIST_CLASSIFICATION           = ['classification', 'tsc',
 ]
 
 TASK_LIST_REGRESSION               = ['regression', 'tsr'
+]
+
+TASK_LIST_DETECTION                = ['detection', 'tsad',
+'univariate-detection', 'multivariate-detection'
 ]
 
 TASK_LIST_BINARYCLASS              = ['univariate-binaryclass', 'multivariate-binaryclass']
@@ -80,3 +88,7 @@ OptimizerSGD                       = 'sgd'
 OptimizerADAM                      = 'adam'
 OptimizerADAMP                     = 'adamp'
 OptimizerRMSPROP                   = 'rmsprop'
+
+TARGET                             = 'ground truth'
+ANOMALY_LABEL                      = 'anomaly'
+ANOMALY_CONFIDENCE                 = 'severity'

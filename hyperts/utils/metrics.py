@@ -190,7 +190,7 @@ def auc(y_true, y_score, average="macro", sample_weight=None,
 
 
 def _task_to_average(task):
-    if 'binary' in task:
+    if 'binary' in task or task in const.TASK_LIST_DETECTION:
         average = 'binary'
     elif 'multiclass' in task:
         average = 'macro'
@@ -216,6 +216,12 @@ def calc_score(y_true, y_preds, y_proba=None, metrics=('accuracy',), task=const.
     score = {}
     if y_proba is None:
         y_proba = y_preds
+    if len(y_true.shape) == 2 and y_true.shape[-1] == 1:
+        y_true = y_true.reshape(-1)
+    if len(y_preds.shape) == 2 and y_preds.shape[-1] == 1:
+        y_preds = y_preds.reshape(-1)
+    if len(y_proba.shape) == 2 and y_proba.shape[-1] == 1:
+        y_proba = y_proba.reshape(-1)
 
     if average is None:
         average = _task_to_average(task)

@@ -139,6 +139,21 @@ class TSToolBox(ToolBox):
         return df.drop(labels=labels, axis=axis, index=index, columns=columns, inplace=inplace)
 
     @staticmethod
+    def pop(df: pd.DataFrame, item):
+        """
+        Return item and drop from frame. Raise KeyError if not found.
+        """
+        assert item is not None
+        return df.pop(item)
+
+    @staticmethod
+    def columns_tolist(df: pd.DataFrame):
+        """
+        Return a list of the DataFrame columns.
+        """
+        return df.columns.tolist()
+
+    @staticmethod
     def arange(*args):
         """
         Return evenly spaced values within a given interval.
@@ -631,10 +646,17 @@ class TSToolBox(ToolBox):
             return p
 
     @staticmethod
-    def infer_pos_label(y_true, task, pos_label=None):
-        y_true = np.array(y_true) if not isinstance(y_true, np.ndarray) else y_true
+    def infer_pos_label(y_true, task, label_name=None, pos_label=None):
+        if task in consts.TASK_LIST_DETECTION:
+            if label_name is not None:
+                label_name = label_name if isinstance(label_name, list) else [label_name]
+                y_true = y_true[label_name]
+            else:
+                pos_label = 1
+                return pos_label
 
-        if task in consts.TASK_LIST_CLASSIFICATION and pos_label is None:
+        y_true = np.array(y_true) if not isinstance(y_true, np.ndarray) else y_true
+        if task in consts.TASK_LIST_CLASSIFICATION + consts.TASK_LIST_DETECTION and pos_label is None:
             if 1 in y_true:
                 pos_label = 1
             elif 'yes' in y_true:
@@ -643,7 +665,7 @@ class TSToolBox(ToolBox):
                 pos_label = 'true'
             else:
                 pos_label = _infer_pos_label(y_true)
-        elif task in consts.TASK_LIST_CLASSIFICATION and pos_label is not None:
+        elif task in consts.TASK_LIST_CLASSIFICATION + consts.TASK_LIST_DETECTION and pos_label is not None:
             if pos_label in y_true:
                 pos_label = pos_label
             else:

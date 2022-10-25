@@ -9,26 +9,29 @@ from hyperts.utils import consts
 from hyperts.utils.transformers import TimeSeriesHyperTransformer
 
 from hyperts.framework.search_space import SearchSpaceMixin, WithinColumnSelector
-from hyperts.framework.estimators import (ProphetForecastEstimator,
-                                          ARIMAForecastEstimator,
-                                          VARForecastEstimator,
-                                          TSFClassificationEstimator,
-                                          KNNClassificationEstimator,
-                                          DeepARForecastEstimator,
-                                          HybirdRNNGeneralEstimator,
-                                          LSTNetGeneralEstimator,
-                                          NBeatsForecastEstimator,
-                                          InceptionTimeClassificationEstimator)
+from hyperts.framework.estimators import ProphetForecastEstimator
+from hyperts.framework.estimators import ARIMAForecastEstimator
+from hyperts.framework.estimators import VARForecastEstimator
+from hyperts.framework.estimators import TSFClassificationEstimator
+from hyperts.framework.estimators import KNNClassificationEstimator
+from hyperts.framework.estimators import DeepARForecastEstimator
+from hyperts.framework.estimators import HybirdRNNGeneralEstimator
+from hyperts.framework.estimators import LSTNetGeneralEstimator
+from hyperts.framework.estimators import NBeatsForecastEstimator
+from hyperts.framework.estimators import InceptionTimeGeneralEstimator
+from hyperts.framework.estimators import IForestDetectionEstimator
+from hyperts.framework.estimators import OCSVMDetectionEstimator
+from hyperts.framework.estimators import ConvVAEDetectionEstimator
 
 from hypernets.tabular import column_selector as tcs
 from hypernets.core.ops import HyperInput, ModuleChoice, Optional
 from hypernets.core.search_space import HyperSpace, Choice
-from hypernets.pipeline.transformers import (SimpleImputer,
-                                             StandardScaler,
-                                             MinMaxScaler,
-                                             MaxAbsScaler,
-                                             SafeOrdinalEncoder,
-                                             AsTypeTransformer)
+from hypernets.pipeline.transformers import SimpleImputer
+from hypernets.pipeline.transformers import StandardScaler
+from hypernets.pipeline.transformers import MinMaxScaler
+from hypernets.pipeline.transformers import MaxAbsScaler
+from hypernets.pipeline.transformers import SafeOrdinalEncoder
+from hypernets.pipeline.transformers import AsTypeTransformer
 
 from hypernets.pipeline.base import Pipeline, DataFrameMapper
 from hypernets.utils import logging, get_params
@@ -170,7 +173,7 @@ class BaseSearchSpaceGenerator:
             hyper_input = HyperInput(name='input1')
             if self.task in consts.TASK_LIST_CLASSIFICATION + consts.TASK_LIST_REGRESSION:
                 self.create_estimators(hyper_input, options)
-            elif self.task in consts.TASK_LIST_FORECAST:
+            elif self.task in consts.TASK_LIST_FORECAST + consts.TASK_LIST_DETECTION:
                 self.create_estimators(self.create_preprocessor(hyper_input, options), options)
             space.set_inputs(hyper_input)
 
@@ -230,6 +233,7 @@ class StatsForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
                  prophet_init_kwargs=None,
                  arima_init_kwargs=None,
                  var_init_kwargs=None,
+                 drop_observed_sample=True,
                  **kwargs):
         if enable_prophet and prophet_init_kwargs is not None:
             kwargs['prophet_init_kwargs'] = prophet_init_kwargs
@@ -244,10 +248,11 @@ class StatsForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
         self.enable_prophet = enable_prophet
         self.enable_arima = enable_arima
         self.enable_var = enable_var
+        self.drop_observed_sample = drop_observed_sample
 
     @property
     def default_prophet_init_kwargs(self):
-        return {
+        default_init_kwargs = {
             'freq': self.freq,
 
             'seasonality_mode': Choice(['additive', 'multiplicative']),
@@ -257,9 +262,13 @@ class StatsForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
             'changepoint_range': Choice([0.8, 0.85, 0.9, 0.95]),
 
             # 'y_scale': Choice(['none-scale', 'min_max', 'max_abs', 'z_scale']),
-            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
-            'drop_sample_rate': Choice([0.0, 0.1, 0.2, 0.5, 0.8]),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1)
         }
+
+        if self.drop_observed_sample:
+            default_init_kwargs['drop_sample_rate'] = Choice([0.0, 0.1, 0.2, 0.5, 0.8])
+
+        return default_init_kwargs
 
     @property
     def default_prophet_fit_kwargs(self):
@@ -269,7 +278,7 @@ class StatsForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
 
     @property
     def default_arima_init_kwargs(self):
-        return {
+        default_init_kwargs = {
             'freq': self.freq,
 
             'p': Choice([1, 2, 3, 4, 5]),
@@ -281,9 +290,13 @@ class StatsForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
             # 'period_offset': Choice([0, 0, 0, 0, 0, 0, 1, -1, 2, -2]),
 
             'y_scale': Choice(['none-scale', 'min_max', 'max_abs', 'z_scale']),
-            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
-            'drop_sample_rate': Choice([0.0, 0.1, 0.2, 0.5, 0.8]),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1)
         }
+
+        if self.drop_observed_sample:
+            default_init_kwargs['drop_sample_rate'] = Choice([0.0, 0.1, 0.2, 0.5, 0.8])
+
+        return default_init_kwargs
 
     @property
     def default_arima_fit_kwargs(self):
@@ -293,14 +306,18 @@ class StatsForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
 
     @property
     def default_var_init_kwargs(self):
-        return {
+        default_init_kwargs = {
             # 'ic': Choice(['aic', 'fpe', 'hqic', 'bic']),
             'maxlags': Choice([None, 2, 6, 12, 24, 48]),
             'trend': Choice(['c', 'ct', 'ctt', 'nc', 'n']),
             'y_log': Choice(['none-log']*4+['logx']*1),
-            'y_scale': Choice(['min_max']*5+['z_scale']*2+['max_abs']*1),
-            'drop_sample_rate': Choice([0.0, 0.1, 0.2, 0.5, 0.8]),
+            'y_scale': Choice(['min_max']*5+['z_scale']*2+['max_abs']*1)
         }
+
+        if self.drop_observed_sample:
+            default_init_kwargs['drop_sample_rate'] = Choice([0.0, 0.1, 0.2, 0.5, 0.8])
+
+        return default_init_kwargs
 
     @property
     def default_var_fit_kwargs(self):
@@ -480,6 +497,7 @@ class DLForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
                  hybirdrnn_init_kwargs=None,
                  lstnet_init_kwargs=None,
                  nbeats_init_kwargs=None,
+                 drop_observed_sample=True,
                  **kwargs):
         if enable_deepar and deepar_init_kwargs is not None:
             kwargs['deepar_init_kwargs'] = deepar_init_kwargs
@@ -500,10 +518,11 @@ class DLForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
         self.enable_hybirdrnn = enable_hybirdrnn
         self.enable_lstnet = enable_lstnet
         self.enable_nbeats = enable_nbeats
+        self.drop_observed_sample = drop_observed_sample
 
     @property
     def default_deepar_init_kwargs(self):
-        return {
+        default_init_kwargs = {
             'timestamp': self.timestamp,
             'task': self.task,
             'metrics': self.metrics,
@@ -523,9 +542,15 @@ class DLForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
 
             'y_log': Choice(['none-log']*4+['logx']*1),
             'y_scale': Choice(['min_max']*4+['z_scale']*1),
-            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
-            'drop_sample_rate': Choice([0.0, 0.1, 0.2, 0.5, 0.8]),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1)
         }
+
+        default_init_kwargs = self.initial_window_kwargs(default_init_kwargs)
+
+        if self.drop_observed_sample:
+            default_init_kwargs['drop_sample_rate'] = Choice([0.0, 0.1, 0.2, 0.5, 0.8])
+
+        return default_init_kwargs
 
     @property
     def default_deepar_fit_kwargs(self):
@@ -537,7 +562,7 @@ class DLForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
 
     @property
     def default_hybirdrnn_init_kwargs(self):
-        return {
+        default_init_kwargs = {
             'timestamp': self.timestamp,
             'task': self.task,
             'metrics': self.metrics,
@@ -556,9 +581,15 @@ class DLForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
 
             'y_log': Choice(['none-log']*4+['logx']*1),
             'y_scale': Choice(['min_max']*5+['z_scale']*2+['max_abs']*1),
-            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
-            'drop_sample_rate': Choice([0.0, 0.1, 0.2, 0.5, 0.8]),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1)
         }
+
+        default_init_kwargs = self.initial_window_kwargs(default_init_kwargs)
+
+        if self.drop_observed_sample:
+            default_init_kwargs['drop_sample_rate'] = Choice([0.0, 0.1, 0.2, 0.5, 0.8])
+
+        return default_init_kwargs
 
     @property
     def default_hybirdrnn_fit_kwargs(self):
@@ -570,7 +601,7 @@ class DLForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
 
     @property
     def default_lstnet_init_kwargs(self):
-        return {
+        default_init_kwargs = {
             'timestamp': self.timestamp,
             'task': self.task,
             'metrics': self.metrics,
@@ -596,9 +627,15 @@ class DLForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
 
             'y_log': Choice(['none-log']*4+['logx']*1),
             'y_scale': Choice(['min_max']*5+['z_scale']*2+['max_abs']*1),
-            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
-            'drop_sample_rate': Choice([0.0, 0.1, 0.2, 0.5, 0.8]),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1)
         }
+
+        default_init_kwargs = self.initial_window_kwargs(default_init_kwargs)
+
+        if self.drop_observed_sample:
+            default_init_kwargs['drop_sample_rate'] = Choice([0.0, 0.1, 0.2, 0.5, 0.8])
+
+        return default_init_kwargs
 
     @property
     def default_lstnet_fit_kwargs(self):
@@ -610,7 +647,7 @@ class DLForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
 
     @property
     def default_nbeats_init_kwargs(self):
-        return {
+        default_init_kwargs = {
             'timestamp': self.timestamp,
             'task': self.task,
             'metrics': self.metrics,
@@ -623,13 +660,18 @@ class DLForecastSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
             'nb_blocks_per_stack': Choice([1, 2, 3]),
             'hidden_layer_units': Choice([64, 128, 256]),
             'forecast_length': Choice([1]*8+[3, 6]),
-            'window': Choice(self.window if isinstance(self.window, list) else [self.window]),
 
             'y_log': Choice(['none-log']*4+['logx']*1),
             'y_scale': Choice(['min_max']*4+['z_scale']*1),
-            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1),
-            'drop_sample_rate': Choice([0.0, 0.1, 0.2, 0.5, 0.8]),
+            'outlier': Choice(['none-outlier']*5+['clip']*3+['fill']*1)
         }
+
+        default_init_kwargs = self.initial_window_kwargs(default_init_kwargs)
+
+        if self.drop_observed_sample:
+            default_init_kwargs['drop_sample_rate'] = Choice([0.0, 0.1, 0.2, 0.5, 0.8])
+
+        return default_init_kwargs
 
     @property
     def default_nbeats_fit_kwargs(self):
@@ -821,7 +863,10 @@ class DLClassRegressSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
                 LSTNetGeneralEstimator, self.default_lstnet_init_kwargs, self.default_lstnet_fit_kwargs)
         if self.enable_inceptiontime:
             class_containers['inceptiontime'] = (
-                InceptionTimeClassificationEstimator, self.default_inceptiontime_init_kwargs,
+                InceptionTimeGeneralEstimator, self.default_inceptiontime_init_kwargs,
+                self.default_inceptiontime_fit_kwargs)
+            regress_containers['inceptiontime'] = (
+                InceptionTimeGeneralEstimator, self.default_inceptiontime_init_kwargs,
                 self.default_inceptiontime_fit_kwargs)
 
         if self.task in consts.TASK_LIST_CLASSIFICATION:
@@ -831,3 +876,216 @@ class DLClassRegressSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
         else:
             raise ValueError(f'Incorrect task name, default {consts.TASK_LIST_CLASSIFICATION}'
                              f', or {consts.TASK_LIST_REGRESSION}.')
+
+
+class StatsDetectionSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
+    """Statistical Search Space for Time Series Anomaly Detection.
+
+    Parameters
+    ----------
+    task: str or None, optional, default None. If not None, it must be 'detection'.
+    timestamp: str or None, optional, default None.
+    metrics: str or None, optional, default None. Support f1, precision, recall, and so on.
+    enable_iforest: bool, default True.
+    enable_ocsvm: bool, default True.
+    iforest_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which prophet is searched.
+    ocsvm_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which prophet is searched.
+
+    Returns
+    ----------
+    search space.
+
+    Notes
+    ----------
+    1. For the hyper-parameters of iforest_init_kwargs, ocsvm_init_kwargs,
+        you can refer to `hyperts.framework.estimators.IforestDetectionEstimator`,
+        'hyperts.framework.estimators.OCSVMDetectionEstimator'.
+    2. If other parameters exist, set them directly. For example, covariables=['is_holiday'].
+    """
+    def __init__(self, task=None, timestamp=None,
+                 enable_iforest=True,
+                 enable_ocsvm=True,
+                 iforest_init_kwargs=None,
+                 ocsvm_init_kwargs=None,
+                 drop_observed_sample=False,
+                 **kwargs):
+        if enable_iforest and iforest_init_kwargs is not None:
+            kwargs['iforest_init_kwargs'] = iforest_init_kwargs
+        if enable_ocsvm and ocsvm_init_kwargs is not None:
+            kwargs['ocsvm_init_kwargs'] = ocsvm_init_kwargs
+        super(StatsDetectionSearchSpace, self).__init__(task, **kwargs)
+
+        self.task = task
+        self.timestamp = timestamp
+        self.enable_iforest = enable_iforest
+        self.enable_ocsvm = enable_ocsvm
+        self.drop_observed_sample = drop_observed_sample
+
+    @property
+    def default_iforest_init_kwargs(self):
+        default_init_kwargs = {
+            'n_estimators': Choice([50, 100, 200, 500]),
+            'contamination': Choice([0.05, 0.1, 0.2]),
+
+            'x_scale': Choice(['min_max', 'z_scale'])
+        }
+
+        if self.drop_observed_sample:
+            default_init_kwargs['drop_sample_rate'] = Choice([0.0, 0.1, 0.2, 0.5, 0.8])
+
+        return default_init_kwargs
+
+    @property
+    def default_iforest_fit_kwargs(self):
+        return {
+            'timestamp': self.timestamp,
+            'covariates': self.covariables,
+        }
+
+    @property
+    def default_ocsvm_init_kwargs(self):
+        default_init_kwargs = {
+            'kernel': Choice(['linear', 'poly', 'sigmoid']+['rbf']*7),
+            'tol': Choice([1e-5, 1e-3, 1e-2, 1e-1]),
+            'nu': Choice([0.05, 0.1, 0.2, 0.5]),
+            'contamination': Choice([0.05, 0.1, 0.2]),
+
+            'x_scale': Choice(['min_max', 'z_scale'])
+        }
+
+        if self.drop_observed_sample:
+            default_init_kwargs['drop_sample_rate'] = Choice([0.0, 0.1, 0.2, 0.5, 0.8])
+
+        return default_init_kwargs
+
+    @property
+    def default_ocsvm_fit_kwargs(self):
+        return {
+            'timestamp': self.timestamp,
+            'covariates': self.covariables,
+        }
+
+    @property
+    def estimators(self):
+        univar_containers = {}
+        multivar_containers = {}
+
+        if self.enable_iforest:
+            univar_containers['iforest'] = (
+            IForestDetectionEstimator, self.default_iforest_init_kwargs, self.default_iforest_fit_kwargs)
+            multivar_containers['iforest'] = (
+            IForestDetectionEstimator, self.default_iforest_init_kwargs, self.default_iforest_fit_kwargs)
+        if self.enable_ocsvm:
+            univar_containers['ocsvm'] = (
+            OCSVMDetectionEstimator, self.default_ocsvm_init_kwargs, self.default_ocsvm_fit_kwargs)
+            multivar_containers['ocsvm'] = (
+            OCSVMDetectionEstimator, self.default_ocsvm_init_kwargs, self.default_ocsvm_fit_kwargs)
+
+        if self.task == consts.Task_UNIVARIATE_DETECTION:
+            return univar_containers
+        elif self.task == consts.Task_MULTIVARIATE_DETECTION:
+            return multivar_containers
+        else:
+            raise ValueError(f'Incorrect task name, default {consts.Task_UNIVARIATE_DETECTION}'
+                             f' or {consts.Task_MULTIVARIATE_DETECTION}.')
+
+
+class DLDetectionSearchSpace(BaseSearchSpaceGenerator, SearchSpaceMixin):
+    """Deep Learning Search Space for Time Series Anomaly Detection.
+
+    Parameters
+    ----------
+    task: str or None, optional, default None. If not None, it must be 'detection'.
+    timestamp: str or None, optional, default None.
+    metrics: str or None, optional, default None. Support f1, precision, recall, and so on.
+    enable_convvae: bool, default True.
+    convvae_init_kwargs: dict or None, optional, default None. If not None, you can customize
+        the hyper-parameters by which prophet is searched.
+
+    Returns
+    ----------
+    search space.
+
+    Notes
+    ----------
+    1. For the hyper-parameters of iforest_init_kwargs, ocsvm_init_kwargs,
+        you can refer to `hyperts.framework.estimators.ConvVAEDetectionEstimator`.
+    2. If other parameters exist, set them directly. For example, covariables=['is_holiday'].
+    """
+    def __init__(self, task=None,
+                 timestamp=None, metrics=None,
+                 window=None, horizon=1,
+                 enable_conv_vae=True,
+                 conv_vae_init_kwargs=None,
+                 drop_observed_sample=False,
+                 **kwargs):
+        if enable_conv_vae and conv_vae_init_kwargs is not None:
+            kwargs['conv_vae_init_kwargs'] = conv_vae_init_kwargs
+        super(DLDetectionSearchSpace, self).__init__(task, **kwargs)
+
+        self.task = task
+        self.timestamp = timestamp
+        self.metrics = metrics
+        self.window = window
+        self.horizon = horizon
+        self.enable_conv_vae = enable_conv_vae
+        self.drop_observed_sample = drop_observed_sample
+
+    @property
+    def default_conv_vae_init_kwargs(self):
+        default_init_kwargs = {
+            'timestamp': self.timestamp,
+            'task': self.task,
+            'metrics': self.metrics,
+            'reducelr_patience': 5,
+            'earlystop_patience': 15,
+            'summary': True,
+
+            'contamination': Choice([0.05, 0.1, 0.2]),
+            'latent_dim': Choice([2, 4, 8, 16, 32]),
+            'conv_type': Choice(['general', 'separable']),
+            'cnn_filters': Choice([64] * 2 + [128] * 3 + [256] * 1),
+            'nb_layers': Choice([2, 3]),
+            'drop_rate': Choice([0.] * 4 + [0.1] * 4 + [0.2] * 1),
+            'window': Choice(self.window if isinstance(self.window, list) else [self.window]),
+
+            'x_scale': Choice(['min_max', 'z_scale'])
+        }
+
+        default_init_kwargs = self.initial_window_kwargs(default_init_kwargs)
+
+        if self.drop_observed_sample:
+            default_init_kwargs['drop_sample_rate'] = Choice([0.0, 0.1, 0.2, 0.5, 0.8])
+
+        return default_init_kwargs
+
+    @property
+    def default_conv_vae_fit_kwargs(self):
+        return {
+            'covariates': self.covariables,
+
+            'epochs': consts.TRAINING_EPOCHS,
+            'batch_size': None,
+            'verbose': 1,
+        }
+
+    @property
+    def estimators(self):
+        univar_containers = {}
+        multivar_containers = {}
+
+        if self.enable_conv_vae:
+            univar_containers['conv_vae'] = (
+            ConvVAEDetectionEstimator, self.default_conv_vae_init_kwargs, self.default_conv_vae_fit_kwargs)
+            multivar_containers['conv_vae'] = (
+            ConvVAEDetectionEstimator, self.default_conv_vae_init_kwargs, self.default_conv_vae_fit_kwargs)
+
+        if self.task == consts.Task_UNIVARIATE_DETECTION:
+            return univar_containers
+        elif self.task == consts.Task_MULTIVARIATE_DETECTION:
+            return multivar_containers
+        else:
+            raise ValueError(f'Incorrect task name, default {consts.Task_UNIVARIATE_DETECTION}'
+                             f' or {consts.Task_MULTIVARIATE_DETECTION}.')
