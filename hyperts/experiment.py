@@ -384,7 +384,7 @@ def make_experiment(train_data,
         raise ValueError("Forecast task 'timestamp' cannot be None.")
 
     if task in consts.TASK_LIST_FORECAST + consts.TASK_LIST_DETECTION and covariates is None:
-        logger.info('If the data contains covariates, specify the covariable column names.')
+        logger.info('If the data contains covariates, specify the covariate column names.')
 
     if freq is consts.DISCRETE_FORECAST and mode is consts.Mode_STATS:
         raise RuntimeError('Note: `stats` mode does not support discrete data forecast.')
@@ -488,7 +488,10 @@ def make_experiment(train_data,
     # 7. Covarite Transformer
     if covariates is not None:
         from hyperts.utils.transformers import CovariateTransformer
-        cs = CovariateTransformer(covariables=covariates).fit(X_train)
+        cs = CovariateTransformer(
+                covariables=covariates,
+                data_cleaner_args=kwargs.pop('data_cleaner_args', None)
+        ).fit(X_train)
         actual_covariates = cs.covariables_
     else:
         from hyperts.utils.transformers import IdentityTransformer
@@ -545,7 +548,7 @@ def make_experiment(train_data,
                     dl_forecast_window) < max_win_size, f'The slide window can not be greater than {max_win_size}'
             else:
                 raise ValueError(f'This type of {dl_forecast_window} is not supported.')
-            logger.info(f'The forecast window length of {mode} mode list is: {dl_forecast_window}')
+            logger.info(f'The slide window length of {mode} mode list is: {dl_forecast_window}')
             hist_store_upper_limit = max(dl_forecast_window) + 1
     else:
         hist_store_upper_limit = consts.HISTORY_UPPER_LIMIT
